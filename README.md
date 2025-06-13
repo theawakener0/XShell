@@ -55,7 +55,7 @@ The Xenomench project aims to deconstruct the barriers between human intent and 
 
 ```bash
 # Clone the repository (or download the source)
-git clone https://github.com/xenomench/xshell.git
+git clone https://github.com/theawakener0/XShell.git
 
 # Navigate to the source directory
 cd xshell/src
@@ -71,7 +71,7 @@ gcc -o xshell Xshell.c -lm
 
 ```bash
 # Clone the repository (or download the source)
-git clone https://github.com/xenomench/xshell.git
+git clone https://github.com/theawakener0/XShell.git
 
 # Navigate to the source directory
 cd xshell\src
