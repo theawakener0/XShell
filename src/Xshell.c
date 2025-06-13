@@ -10,20 +10,31 @@
 #include <unistd.h> // For chdir. On POSIX, also for fork, execvp.
 #include <signal.h>
 #include <ctype.h> // For isdigit
-#include <ctype.h> // For isdigit
+
 
 #ifdef _WIN32
 #include <io.h> // For isatty
 #include <lmcons.h> // For UNLEN and GetUserName
+#include <dirent.h> // For directory operations
+#else
+#include <pwd.h> // For getpwuid
+#include <sys/types.h> // For uid_t
+#include <dirent.h> // For directory operations
 #endif
 
 #define WIN32_LEAN_AND_MEAN // Exclude rarely-used stuff from Windows headers
 
-#include <windows.h>
-#include <winsock2.h>
-#include <ws2tcpip.h> // For inet_pton and other newer functions
-#include <stdio.h>
-#include <stdlib.h> // For exit
+#ifdef _WIN32
+    #include <winsock2.h>
+    #include <ws2tcpip.h> // For inet_pton and other newer functions
+#else
+    #include <sys/socket.h>
+    #include <netinet/in.h>
+    #include <arpa/inet.h>
+    #include <netdb.h>
+    #include <unistd.h> // For close()
+#endif
+
 
 // Need to link with Ws2_32.lib
 #pragma comment(lib, "Ws2_32.lib")
@@ -31,7 +42,7 @@
 // for different OS wait functions
 #ifdef _WIN32
 #include <windows.h>
-#include <direct.h> // For chdir on Windows
+#include <conio.h>
 #else
 #include <sys/wait.h>
 #include <sys/types.h>
@@ -54,6 +65,17 @@ void print_slow(const char *text, useconds_t delay) {
 #define BUFFER_SIZE 1024
 #define XSH_TOK_DELIM " \t\r\n\a"
 #define XSH_HISTORY_SIZE 100
+#define TAB_KEY 9
+
+// Forward declarations
+extern char *builtin_str[];
+extern int history_count;
+extern char *history[XSH_HISTORY_SIZE];
+char* build_prompt(void);
+int xsh_num_builtins(void);
+char** find_matches(const char* partial, int* match_count);
+void display_matches(char** matches, int match_count);
+char* complete_command(const char* partial);
 
 
 void xsh_banner(void) {
@@ -73,28 +95,90 @@ char *xsh_read_line(void){
     int position = 0;
     char *buffer = malloc(sizeof(char) * bufsize);
     int c;
+    int tab_pressed = 0;
 
     if (!buffer) {
         fprintf(stderr, "xsh: allocation error\n");
         exit(EXIT_FAILURE);
     }
+
+    buffer[0] = '\0'; // Initialize buffer to empty string
+
     while (1) {
-        c = getchar();
+#ifdef _WIN32
+        c = _getch(); // Use _getch() to get a character without echoing it
+        
+        if (c == TAB_KEY) {
+            tab_pressed = 1;
 
-        if (c == EOF || c == '\n') {
-            buffer[position] = '\0';
-            return buffer;
-        } else {
-            buffer[position] = c;
+            buffer[position] = '\0'; // Null-terminate the current input
+
+            char* completion = complete_command(buffer);
+            if (completion) {
+                // Clear current line and print the prompt and completed command
+                printf("\r%s%s", build_prompt(), completion);
+
+                strcpy(buffer, completion); // Copy the completed command back to buffer
+                position = strlen(buffer); // Update position to the end of the completed command
+                free(completion); // Free the allocated memory for completion
+            } else {
+                int match_count = 0;
+                char** matches = find_matches(buffer, &match_count);
+
+                if (match_count > 0) {
+                    printf("\n");
+                    display_matches(matches, match_count);
+
+                    // Redisplay prompt and current input
+                    printf("\n%s%s", build_prompt(), buffer);
+
+                    // Free memory for matches
+                    for (int i = 0; i < match_count; i++) {
+                        free(matches[i]); // Free each match
+                    }
+                    free(matches); // Free the array of matches
+                }
+            }
+            continue;
         }
-        position++;
 
-        if (position >= bufsize) {
-            bufsize += XSH_RL_BUFSIZE;
-            buffer = realloc(buffer, sizeof(char) * bufsize);
-            if (!buffer) {
-                fprintf(stderr, "xsh: allocation error\n");
-                exit(EXIT_FAILURE);
+        if (c == '\r' || c == '\n') {
+            _putch('\n'); // Echo a newline
+            buffer[position] = '\0'; // Null-terminate the input
+            return buffer; // Return the input line
+        }
+
+        if (c == '\b' && position > 0) {
+            position--;
+            _putch('\b'); // Move cursor back
+            _putch(' '); // Overwrite with space
+            _putch('\b'); // Move cursor back again
+            continue;
+        }
+
+        // Echo the character (only if it's not a tab)
+        _putch(c);
+
+#else
+        c = getchar();
+        if (c == EOF || c == '\n') {
+            buffer[position] = '\0'; // Null-terminate the input
+            return buffer; // Return the input line
+        }
+
+
+#endif
+        if (c != TAB_KEY) {
+            buffer[position] = c; // Store the character in the buffer
+            position++;
+
+            if (position >= bufsize) {
+                bufsize += XSH_RL_BUFSIZE; // Increase buffer size
+                buffer = realloc(buffer, sizeof(char) * bufsize);
+                if (!buffer) {
+                    fprintf(stderr, "xsh: allocation error\n");
+                    exit(EXIT_FAILURE);
+                }
             }
         }
     }
@@ -119,6 +203,194 @@ char *xsh_read_line(void){
     }
 
 */
+
+char** find_matches(const char* partial, int* match_count) {
+    int bufsize = XSH_TOK_BUFSIZE;
+    char** matches = malloc(bufsize * sizeof(char*));
+    size_t partial_len = strlen(partial);
+    
+    if (!matches) {
+        fprintf(stderr, "xsh: allocation error in find_matches\n");
+        exit(EXIT_FAILURE);
+    }
+    
+    *match_count = 0;
+    
+    // First check built-in commands
+    for (int i = 0; i < xsh_num_builtins(); i++) {
+        if (strncmp(partial, builtin_str[i], partial_len) == 0) {
+            matches[*match_count] = strdup(builtin_str[i]);
+            (*match_count)++;
+            
+            if (*match_count >= bufsize) {
+                bufsize += XSH_TOK_BUFSIZE;
+                matches = realloc(matches, bufsize * sizeof(char*));
+                if (!matches) {
+                    fprintf(stderr, "xsh: allocation error in find_matches\n");
+                    exit(EXIT_FAILURE);
+                }
+            }
+        }
+    }
+    
+    // Check files in current directory if no command matches or if there's a path prefix
+    if (*match_count == 0 || strchr(partial, '/') || strchr(partial, '\\')) {
+        DIR* dir;
+        struct dirent* entry;
+        char path[XSH_MAXLINE] = "."; // Default to current directory
+        char prefix[XSH_MAXLINE] = ""; // What to search for in directory
+        
+        // Extract directory and prefix from partial
+        char* last_slash = strrchr(partial, '/');
+        if (!last_slash) last_slash = strrchr(partial, '\\');
+        
+        if (last_slash) {
+            // There's a path component
+            size_t path_len = last_slash - partial;
+            strncpy(path, partial, path_len);
+            path[path_len] = '\0';
+            strcpy(prefix, last_slash + 1);
+        } else {
+            // No path, just a filename prefix
+            strcpy(prefix, partial);
+        }
+        
+        dir = opendir(path);
+        if (dir) {
+            size_t prefix_len = strlen(prefix);
+            while ((entry = readdir(dir)) != NULL) {
+                if (strncmp(prefix, entry->d_name, prefix_len) == 0) {
+                    // Build full path for the match
+                    char full_path[XSH_MAXLINE];
+                    if (last_slash) {
+                        // Reconstruct the path with the matched filename
+                        strncpy(full_path, partial, last_slash - partial + 1);
+                        full_path[last_slash - partial + 1] = '\0';
+                        strcat(full_path, entry->d_name);
+                    } else {
+                        strcpy(full_path, entry->d_name);
+                    }
+                    
+                    matches[*match_count] = strdup(full_path);
+                    (*match_count)++;
+                    
+                    if (*match_count >= bufsize) {
+                        bufsize += XSH_TOK_BUFSIZE;
+                        matches = realloc(matches, bufsize * sizeof(char*));
+                        if (!matches) {
+                            fprintf(stderr, "xsh: allocation error in find_matches\n");
+                            exit(EXIT_FAILURE);
+                        }
+                    }
+                }
+            }
+            closedir(dir);
+        }
+    }
+    
+    // Check command history
+    for (int i = 0; i < history_count; i++) {
+        if (strncmp(partial, history[i], partial_len) == 0) {
+            matches[*match_count] = strdup(history[i]);
+            (*match_count)++;
+            
+            if (*match_count >= bufsize) {
+                bufsize += XSH_TOK_BUFSIZE;
+                matches = realloc(matches, bufsize * sizeof(char*));
+                if (!matches) {
+                    fprintf(stderr, "xsh: allocation error in find_matches\n");
+                    exit(EXIT_FAILURE);
+                }
+            }
+        }
+    }
+    
+    return matches;
+}
+
+void display_matches(char** matches, int match_count) {
+    if (match_count == 0) return;
+    
+    printf("\nPossible completions:\n");
+    
+    // Calculate max length for formatting
+    size_t max_len = 0;
+    for (int i = 0; i < match_count; i++) {
+        size_t len = strlen(matches[i]);
+        if (len > max_len) max_len = len;
+    }
+    
+    // Format in columns
+    int cols = 80 / (max_len + 2); // +2 for spacing
+    if (cols == 0) cols = 1; // Ensure at least one column
+    
+    for (int i = 0; i < match_count; i++) {
+        printf("%-*s", (int)(max_len + 2), matches[i]);
+        if ((i + 1) % cols == 0 || i == match_count - 1) {
+            printf("\n");
+        }
+    }
+}
+
+char* complete_command(const char* partial) {
+    int match_count = 0;
+    char** matches = find_matches(partial, &match_count);
+    
+    if (match_count == 0) {
+        free(matches);
+        return NULL;
+    }
+    
+    if (match_count == 1) {
+        // Only one match, return it
+        char* result = strdup(matches[0]);
+        free(matches[0]);
+        free(matches);
+        return result;
+    }
+    
+    // Multiple matches, find common prefix
+    size_t common_len = strlen(matches[0]);
+    for (int i = 1; i < match_count; i++) {
+        size_t j;
+        for (j = 0; j < common_len && j < strlen(matches[i]); j++) {
+            if (matches[0][j] != matches[i][j]) {
+                common_len = j;
+                break;
+            }
+        }
+        if (j < common_len) {
+            common_len = j;
+        }
+    }
+    
+    // If common prefix is longer than partial, return it
+    if (common_len > strlen(partial)) {
+        char* result = malloc(common_len + 1);
+        if (!result) {
+            fprintf(stderr, "xsh: allocation error in complete_command\n");
+            exit(EXIT_FAILURE);
+        }
+        strncpy(result, matches[0], common_len);
+        result[common_len] = '\0';
+        
+        // Clean up
+        for (int i = 0; i < match_count; i++) {
+            free(matches[i]);
+        }
+        free(matches);
+        
+        return result;
+    }
+    
+    // No better completion, free resources and return NULL
+    for (int i = 0; i < match_count; i++) {
+        free(matches[i]);
+    }
+    free(matches);
+    
+    return NULL;
+}
 
 char **xsh_split_line(char *line) {
     int bufsize = XSH_TOK_BUFSIZE, position = 0;
@@ -606,6 +878,8 @@ int xsh_touch(char **args) {
 }
 
 int xsh_client(char **args) {
+#ifdef _WIN32
+    // Windows implementation
     WSADATA wsaData;
     SOCKET connectSocket = INVALID_SOCKET;
     struct sockaddr_in serverAddr;
@@ -727,7 +1001,6 @@ int xsh_client(char **args) {
         } else {
             printf("[!] recv failed with error: %d\n", WSAGetLastError());
         }
-
     }
     free(input); // Free the allocated memory for input
 
@@ -740,11 +1013,128 @@ int xsh_client(char **args) {
         printf("[*] Socket closed.\n");
     }
     
-
     // 8. Cleanup Winsock
     WSACleanup();
     printf("[*] Winsock cleaned up.\n");
-
+#else
+    // POSIX implementation
+    int sockfd;
+    struct sockaddr_in serverAddr;
+    char *sendMessage = "XenoGate2025";
+    char recvBuffer[BUFFER_SIZE];
+    int bytesRead, bytesWritten;
+    
+    // 1. Create a socket
+    sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd < 0) {
+        perror("[!] Socket creation failed");
+        return 1;
+    }
+    printf("[*] Socket created.\n");
+    
+    // 2. Prepare the sockaddr_in structure for the server
+    memset(&serverAddr, 0, sizeof(serverAddr));
+    serverAddr.sin_family = AF_INET;
+    serverAddr.sin_port = htons(SERVER_PORT);
+    // Convert IPv4 address from text to binary form
+    if (inet_pton(AF_INET, SERVER_IP, &serverAddr.sin_addr) <= 0) {
+        printf("[!] inet_pton failed or invalid IP address.\n");
+        close(sockfd);
+        return 1;
+    }
+    printf("[*] Server address prepared: %s:%d\n", SERVER_IP, SERVER_PORT);
+    
+    // 3. Connect to server
+    if (connect(sockfd, (struct sockaddr *)&serverAddr, sizeof(serverAddr)) < 0) {
+        perror("[!] Connection failed");
+        close(sockfd);
+        return 1;
+    }
+    printf("[*] Connected to server.\n");
+    
+    // 4. Send initial message
+    bytesWritten = send(sockfd, sendMessage, strlen(sendMessage), 0);
+    if (bytesWritten < 0) {
+        perror("[!] Send failed");
+        close(sockfd);
+        return 1;
+    }
+    printf("[*] Bytes Sent: %d\n", bytesWritten);
+    printf("[*] Sent message: %s\n", sendMessage);
+    
+    // 5. Receive initial response
+    bytesRead = recv(sockfd, recvBuffer, BUFFER_SIZE - 1, 0);
+    if (bytesRead > 0) {
+        recvBuffer[bytesRead] = '\0'; // Null-terminate the received data
+        printf("[*] Bytes received: %d\n", bytesRead);
+        printf("[*] Received message: %s\n", recvBuffer);
+    } else if (bytesRead == 0) {
+        printf("[!] Connection closed by server.\n");
+    } else {
+        perror("[!] Receive failed");
+    }
+    
+    // 6. Interactive communication loop
+    char *input = malloc(BUFFER_SIZE);
+    while(1) {
+        if (input == NULL) {
+            printf("[!] Memory allocation failed.\n");
+            break;
+        }
+        
+        printf("[*] Enter a message to send (or 'exit' to quit): ");
+        if (scanf("%s", input) != 1) {
+            int ch_clear;
+            while ((ch_clear = getchar()) != '\n' && ch_clear != EOF);
+            fprintf(stderr, "[!] Input error or EOF detected. Exiting client input loop.\n");
+            free(input);
+            break;
+        }
+        
+        // Consume the rest of the line
+        int ch_consume;
+        while ((ch_consume = getchar()) != '\n' && ch_consume != EOF);
+        
+        if (strcmp(input, "exit") == 0) {
+            free(input);
+            break; // Exit the loop if user types 'exit'
+        }
+        
+        // Send user input
+        printf("[*] Sending message: %s\n", input);
+        bytesWritten = send(sockfd, input, strlen(input), 0);
+        if (bytesWritten < 0) {
+            perror("[!] Send failed");
+            close(sockfd);
+            free(input);
+            return 1;
+        }
+        printf("[*] Bytes Sent: %d\n", bytesWritten);
+        printf("[*] Sent message: %s\n", input);
+        
+        // Receive response
+        bytesRead = recv(sockfd, recvBuffer, BUFFER_SIZE - 1, 0);
+        if (bytesRead > 0) {
+            recvBuffer[bytesRead] = '\0';
+            printf("[*] Bytes received: %d\n", bytesRead);
+            printf("[*] Received message: %s\n", recvBuffer);
+        } else if (bytesRead == 0) {
+            printf("[!] Connection closed by server.\n");
+            break;
+        } else {
+            perror("[!] Receive failed");
+            break;
+        }
+    }
+    free(input);
+    
+    // 7. Close the socket
+    if (close(sockfd) < 0) {
+        perror("[!] Socket close failed");
+    } else {
+        printf("[*] Socket closed.\n");
+    }
+#endif
     return 1;
 }
 
@@ -860,7 +1250,7 @@ int execute_history_command(char *input) {
 }
 
 
-char* build_prompt() {
+char* build_prompt(void) {
     static char prompt[XSH_MAXLINE];
     char cwd[XSH_MAXLINE];
     char short_cwd[XSH_MAXLINE];
