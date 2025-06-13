@@ -58,13 +58,13 @@ The Xenomench project aims to deconstruct the barriers between human intent and 
 git clone https://github.com/theawakener0/XShell.git
 
 # Navigate to the source directory
-cd xshell/src
+cd Xshell/src
 
 # Compile
-gcc -o xshell Xshell.c -lm
+gcc Xshell.c -o Xshell -lm
 
 # Execute
-./xshell
+./Xshell
 ```
 
 ### Windows
@@ -74,13 +74,13 @@ gcc -o xshell Xshell.c -lm
 git clone https://github.com/theawakener0/XShell.git
 
 # Navigate to the source directory
-cd xshell\src
+cd XShell/src
 
 # Compile
-gcc -o xshell.exe Xshell.c -lws2_32
+gcc Xshell.c -o Xshell.exe -lm -lws2_32
 
 # Execute
-xshell.exe
+Xshell.exe
 ```
 
 ---
