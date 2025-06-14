@@ -2,7 +2,7 @@
 
 **_Break the terminal. Break the system. Build anew._**
 
-![Version](https://img.shields.io/badge/version-v0.3--alpha-orange) ![License](https://img.shields.io/badge/license-MIT-blue) ![Build](https://img.shields.io/badge/build-passing-brightgreen)
+![Version](https://img.shields.io/badge/version-v0.2--alpha-orange) ![License](https://img.shields.io/badge/license-MIT-blue) ![Build](https://img.shields.io/badge/build-passing-brightgreen)
 
 ---
 
