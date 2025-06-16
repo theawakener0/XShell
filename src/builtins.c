@@ -7,6 +7,7 @@
 #include <string.h>
 #include <unistd.h> // For chdir, getcwd (POSIX)
 #include <dirent.h> // For opendir, readdir, closedir (used indirectly by ls or completion)
+#include <ctype.h>  // For tolower (needed for case-insensitive grep)
 
 #ifdef _WIN32
 #include <direct.h> // For _mkdir, _getcwd
@@ -41,6 +42,27 @@ char *builtin_desc[] = {
     "Display help information about available commands",
     "Clear the terminal screen",
     "Exit the shell program"
+};
+
+// Usage strings for built-in commands
+char *builtin_usage[] = {
+    "Usage: cd <directory>",
+    "Usage: pwd",
+    "Usage: ls [path]",
+    "Usage: grep [-i] <pattern> [file...]",
+    "Usage: echo [string ...]",
+    "Usage: mkdir <directory_name> [directory_name2] ...",
+    "Usage: touch <file_name> [file_name2] ...",
+    "Usage: cp <source_file> <destination_file>",
+    "Usage: mv <source_file> <destination_file>",
+    "Usage: rm <name1> [name2] ...",
+    "Usage: cat <file_name> [file_name2] ...",
+    "Usage: xmanifesto",
+    "Usage: xeno [hostname] [port]  (Note: Actual arguments depend on client implementation)",
+    "Usage: history",
+    "Usage: help [command]",
+    "Usage: clear",
+    "Usage: exit"
 };
 
 // Array of function pointers for built-in commands
@@ -82,12 +104,88 @@ int xsh_pwd(char **args) {
 }
 
 int xsh_ls(char **args) {
-    // This is a simplistic version. A more robust ls would use readdir etc.
-    // and handle arguments for paths, flags etc.
+    const char *path_to_list = "."; // Default to current directory
+
+    if (args[1] != NULL) {
+        // If a path is provided, use it.
+        path_to_list = args[1];
+    }
+
 #ifdef _WIN32
-    system("dir"); 
-#else
-    system("ls");
+    WIN32_FIND_DATA findFileData;
+    HANDLE hFind = INVALID_HANDLE_VALUE;
+    char searchPath[XSH_MAXLINE];
+
+    // Prepare search path (e.g., "directory\*")
+    strncpy(searchPath, path_to_list, XSH_MAXLINE - 1);
+    searchPath[XSH_MAXLINE - 1] = '\0'; // Ensure null termination
+
+    size_t current_len = strlen(searchPath);
+    if (current_len > 0 && (searchPath[current_len - 1] == '\\' || searchPath[current_len - 1] == '/')) {
+        if (current_len + 1 < XSH_MAXLINE) {
+            strcat(searchPath, "*");
+        } else {
+            fprintf(stderr, "xsh: ls: path too long to append wildcard: %s\n", path_to_list);
+            return 1;
+        }
+    } else {
+        if (current_len + 2 < XSH_MAXLINE) { // Check space for '\*' and null terminator
+            strcat(searchPath, "\\*");
+        } else {
+            fprintf(stderr, "xsh: ls: path too long to append wildcard: %s\n", path_to_list);
+            return 1;
+        }
+    }
+
+    hFind = FindFirstFile(searchPath, &findFileData);
+
+    if (hFind == INVALID_HANDLE_VALUE) {
+        DWORD dwError = GetLastError();
+        if (dwError != ERROR_FILE_NOT_FOUND) {
+            fprintf(stderr, "xsh: ls: cannot access '%s': ", path_to_list);
+            LPVOID lpMsgBuf;
+            FormatMessage(
+                FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                NULL, dwError, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+                (LPTSTR) &lpMsgBuf, 0, NULL );
+            fprintf(stderr, "%s\n", (char*)lpMsgBuf);
+            LocalFree(lpMsgBuf);
+        }
+        // If ERROR_FILE_NOT_FOUND, it could be an empty or non-existent directory.
+        // ls typically prints nothing for an empty directory and returns success.
+        return 1;
+    }
+
+    do {
+        if (strcmp(findFileData.cFileName, ".") == 0 || strcmp(findFileData.cFileName, "..") == 0) {
+            continue;
+        }
+        printf("%s\n", findFileData.cFileName);
+    } while (FindNextFile(hFind, &findFileData) != 0);
+
+    FindClose(hFind);
+
+#else // POSIX implementation
+    DIR *dir;
+    struct dirent *entry;
+
+    dir = opendir(path_to_list);
+    if (dir == NULL) {
+        fprintf(stderr, "xsh: ls: cannot access '%s': ", path_to_list);
+        perror("");
+        return 1;
+    }
+
+    while ((entry = readdir(dir)) != NULL) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+        printf("%s\n", entry->d_name);
+    }
+
+    if (closedir(dir) == -1) {
+        perror("xsh: ls: closedir failed");
+    }
 #endif
     return 1;
 }
@@ -170,19 +268,22 @@ int xsh_mv(char **args) {
 
 int xsh_rm(char **args) {
     if (args[1] == NULL) {
-        fprintf(stderr, "xsh: rm: missing file operand\n");
-        fprintf(stderr, "Usage: rm <file_name> [file_name2] ...\n");
+        fprintf(stderr, "xsh: rm: missing file or directory operand\n");
+        fprintf(stderr, "Usage: rm <name1> [name2] ...\n");
         return 1;
     }
     for (int i = 1; args[i] != NULL; i++) {
-        if (remove(args[i]) != 0) {
-            fprintf(stderr, "xsh: rm: cannot remove '%s': ", args[i]);
-            perror("");
+        // remove_recursively_internal is now defined in utils.c and declared in utils.h
+        if (remove_recursively_internal(args[i]) != 0) {
+            // Error messages are printed by remove_recursively_internal
+            // Standard rm typically continues with other arguments even if one fails.
+            // We might want to return a different status or set a flag if any removal fails,
+            // but for now, it prints errors and continues.
         } else {
-            printf("Removed file '%s'\n", args[i]);
+            printf("Removed '%s'\n", args[i]);
         }
     }
-    return 1;
+    return 1; // Continue shell loop
 }
 
 int xsh_cat(char **args) {
@@ -213,60 +314,79 @@ int xsh_cat(char **args) {
     return 1;
 }
 
+
 int xsh_grep(char **args) {
-    if (args[1] == NULL) {
-        fprintf(stderr, "xsh: grep: missing pattern\n");
-        fprintf(stderr, "Usage: grep <pattern> [file]\n");
-        return 1;
-    }
-    char *pattern = args[1];
-    char *search_pattern = pattern;
-    FILE *fp;
-    char *filename = NULL;
+    int case_insensitive = 0;
+    char *pattern_arg = NULL;
+    int first_file_arg_index = -1;
 
-    size_t pattern_len = strlen(pattern);
-    if (pattern_len >= 2 && pattern[0] == '"' && pattern[pattern_len - 1] == '"') {
-        search_pattern = malloc(pattern_len - 1);
-        if (!search_pattern) {
-            fprintf(stderr, "xsh: grep: allocation error\n");
-            return 1;
-        }
-        strncpy(search_pattern, pattern + 1, pattern_len - 2);
-        search_pattern[pattern_len - 2] = '\0';
-    } 
-
-    if (args[2] != NULL) {
-        filename = args[2];
-        fp = fopen(filename, "r");
-        if (!fp) {
-            fprintf(stderr, "xsh: grep: cannot open file '%s': ", filename);
-            perror("");
-            if (search_pattern != pattern) free(search_pattern);
-            return 1;
-        }
-    } else {
-        // Reading from stdin is not implemented here for simplicity, 
-        // but could be added by setting fp = stdin;
-        fprintf(stderr, "xsh: grep: reading from stdin not implemented. Please specify a file.\n");
-        fprintf(stderr, "Usage: grep <pattern> [file]\n");
-        if (search_pattern != pattern) free(search_pattern);
+    if (args[1] == NULL) { // No arguments after "grep"
+        fprintf(stderr, "xsh: grep: missing pattern\nUsage: grep [-i] <pattern> [file...]");
         return 1;
     }
 
-    char line[XSH_MAXLINE];
-    while (fgets(line, XSH_MAXLINE, fp)) {
-        if (strstr(line, search_pattern)) {
-            fputs(line, stdout);
+    int current_arg_idx = 1;
+    // Parse options
+    while (args[current_arg_idx] != NULL && args[current_arg_idx][0] == '-' && strlen(args[current_arg_idx]) > 1) {
+        if (strcmp(args[current_arg_idx], "-i") == 0) {
+            case_insensitive = 1;
+            current_arg_idx++;
+        } else {
+            fprintf(stderr, "xsh: grep: unknown option %s\nUsage: grep [-i] <pattern> [file...]", args[current_arg_idx]);
+            return 1;
         }
     }
 
-    if (fp != stdin && filename != NULL) {
-        if (fclose(fp) == EOF) {
-            perror("xsh: grep: fclose");
+    // Next argument is the pattern
+    if (args[current_arg_idx] == NULL) {
+        fprintf(stderr, "xsh: grep: missing pattern after options\nUsage: grep [-i] <pattern> [file...]");
+        return 1;
+    }
+    pattern_arg = args[current_arg_idx];
+    current_arg_idx++; // Move to where filenames would start
+    first_file_arg_index = current_arg_idx;
+
+    char *actual_pattern = pattern_arg;
+    char *allocated_quoted_pattern_buffer = NULL;
+    size_t pattern_len = strlen(pattern_arg);
+
+    if (pattern_len >= 2 && pattern_arg[0] == '"' && pattern_arg[pattern_len - 1] == '"') {
+        allocated_quoted_pattern_buffer = malloc(pattern_len - 1);
+        if (!allocated_quoted_pattern_buffer) {
+            fprintf(stderr, "xsh: grep: memory allocation error for pattern\n");
+            return 1;
+        }
+        strncpy(allocated_quoted_pattern_buffer, pattern_arg + 1, pattern_len - 2);
+        allocated_quoted_pattern_buffer[pattern_len - 2] = '\0';
+        actual_pattern = allocated_quoted_pattern_buffer;
+    }
+
+    int num_file_args = 0;
+    for (int i = first_file_arg_index; args[i] != NULL; i++) {
+        num_file_args++;
+    }
+    int print_filenames_flag = (num_file_args > 1);
+
+    if (args[first_file_arg_index] == NULL) { // No file arguments, read from stdin
+        process_grep_stream(stdin, actual_pattern, case_insensitive, NULL); // No filename to print for stdin
+    } else { // Process one or more files
+        for (int i = first_file_arg_index; args[i] != NULL; i++) {
+            FILE *fp = fopen(args[i], "r");
+            if (fp == NULL) {
+                fprintf(stderr, "xsh: grep: %s: ", args[i]);
+                perror("");
+                continue; // Standard grep continues with other files
+            }
+            process_grep_stream(fp, actual_pattern, case_insensitive, print_filenames_flag ? args[i] : NULL);
+            if (fclose(fp) == EOF) {
+                fprintf(stderr, "xsh: grep: error closing %s: ", args[i]);
+                perror("");
+            }
         }
     }
-    if (search_pattern != pattern) {
-        free(search_pattern);
+
+    if (allocated_quoted_pattern_buffer) {
+        free(allocated_quoted_pattern_buffer);
     }
     return 1;
 }
@@ -390,18 +510,34 @@ int xsh_history(char **args) {
 }
 
 int xsh_help(char **args) {
-    printf("XShell - A simple C Shell by Xenomench\n");
-    printf("Type command names and arguments, and hit enter.\n");
-    printf("The following are built in:\n");
+    if (args[1] == NULL) {
+        printf("XShell - A simple C Shell by Xenomench\n");
+        printf("Type command names and arguments, and hit enter.\n");
+        printf("The following are built in:\n");
 
-    for (int i = 0; i < xsh_num_builtins(); i++) {
-        printf("  - %s    %s\n", builtin_str[i], builtin_desc[i]);
+        for (int i = 0; i < xsh_num_builtins(); i++) {
+            printf("  - %s    %s\n", builtin_str[i], builtin_desc[i]);
+        }
+
+        printf("\nFor more information on a specific command, type 'help <command>'.\n");
+    } else {
+        // Display help for a specific command
+        for (int i = 0; i < xsh_num_builtins(); i++) {
+            if (strcmp(args[1], builtin_str[i]) == 0) {
+                printf("%s: %s\n", builtin_str[i], builtin_desc[i]);
+                printf("%s\n", builtin_usage[i]);
+                return 1;
+            }
+        }
+        fprintf(stderr, "xsh: help: no help topics match '%s'.\n", args[1]);
+        fprintf(stderr, "Run 'help' to see a list of available commands.\n");
     }
 
     return 1;
 }
 
 int xsh_exit(char **args) {
+    printf("Exiting XShell. Goodbye!\n");
     return 0; // Signal to terminate the shell loop
 }
 

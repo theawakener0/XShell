@@ -1,5 +1,11 @@
 #include "input.h"
 #include "xsh.h" // For build_prompt, history, etc.
+#include "builtins.h" // For xsh_num_builtins, builtin_str for completion
+
+#ifdef __linux__ // For termios, read, isatty, STDIN_FILENO
+#include <termios.h>
+#include <unistd.h> 
+#endif
 
 // Implementation of input handling functions
 
@@ -8,22 +14,18 @@ char *xsh_read_line(void){
     int position = 0;
     char *buffer = malloc(sizeof(char) * bufsize);
     int c;
-    // int tab_pressed = 0; // tab_pressed was declared but not used effectively, consider removing or implementing fully
 
     if (!buffer) {
         fprintf(stderr, "xsh: allocation error\n");
         exit(EXIT_FAILURE);
     }
+    buffer[0] = '\0'; // Initialize buffer
 
-    buffer[0] = '\0'; // Initialize buffer to empty string
-
-    while (1) {
 #ifdef _WIN32
+    while (1) {
         c = _getch(); // Use _getch() to get a character without echoing it
         
         if (c == TAB_KEY) {
-            // tab_pressed = 1; // Mark tab as pressed
-
             buffer[position] = '\0'; // Null-terminate the current input
 
             char* completion = complete_command(buffer);
@@ -77,19 +79,7 @@ char *xsh_read_line(void){
             position++;
         }
 
-#else // POSIX systems
-        c = getchar();
-        if (c == EOF || c == '\n') {
-            buffer[position] = '\0'; // Null-terminate the input
-            return buffer; // Return the input line
-        }
-        // Basic POSIX input, tab completion and advanced line editing not implemented here for simplicity
-        // This part would need significant work for feature parity with Windows _getch loop
-        buffer[position] = c; // Store the character in the buffer
-        position++;
-#endif
-
-        // Common buffer resizing logic for both platforms
+        // Common buffer resizing logic
         if (position >= bufsize -1) { // -1 to ensure space for null terminator
             bufsize += XSH_RL_BUFSIZE; // Increase buffer size
             char *new_buffer = realloc(buffer, sizeof(char) * bufsize);
@@ -103,6 +93,141 @@ char *xsh_read_line(void){
         // Ensure buffer is null-terminated after character addition (important for tab completion logic)
         buffer[position] = '\0'; 
     }
+
+#elif __linux__ // POSIX systems (specifically targeting Linux for termios)
+    static struct termios old_tio, new_tio;
+    int is_tty = isatty(STDIN_FILENO);
+
+    if (is_tty) {
+        tcgetattr(STDIN_FILENO, &old_tio); // Get current terminal attributes
+        new_tio = old_tio;                 // Copy old attributes to new
+        new_tio.c_lflag &= ~(ICANON | ECHO); // Disable canonical mode and echo
+        new_tio.c_cc[VMIN] = 1;            // Read one character at a time
+        new_tio.c_cc[VTIME] = 0;           // No timeout
+        tcsetattr(STDIN_FILENO, TCSANOW, &new_tio); // Set new attributes
+    }
+
+    while (1) {
+        if (is_tty) {
+            char ch;
+            ssize_t n = read(STDIN_FILENO, &ch, 1); // Read one character
+            if (n <= 0) { // Error or EOF
+                if (is_tty) tcsetattr(STDIN_FILENO, TCSANOW, &old_tio); // Restore terminal
+                buffer[position] = '\0';
+                // If EOF and buffer is empty, treat as exit or handle appropriately
+                if (n == 0 && position == 0) { free(buffer); return NULL; } 
+                return buffer;
+            }
+            c = ch;
+        } else { // Not a TTY, use getchar for basic line reading
+            c = getchar();
+            if (c == EOF) {
+                buffer[position] = '\0';
+                if (position == 0) { free(buffer); return NULL; } // EOF on empty line
+                return buffer;
+            }
+        }
+
+        if (c == TAB_KEY && is_tty) {
+            buffer[position] = '\0';
+            char* completion = complete_command(buffer);
+            if (completion) {
+                // Clear current line (crude way, assumes prompt + buffer fits)
+                // A more robust way would involve cursor manipulation (e.g. tput)
+                printf("\r%*s\r", (int)(strlen(build_prompt()) + position), ""); 
+                printf("%s%s", build_prompt(), completion);
+                fflush(stdout);
+
+                strncpy(buffer, completion, bufsize - 1);
+                buffer[bufsize - 1] = '\0';
+                position = strlen(buffer);
+                free(completion);
+            } else {
+                int match_count = 0;
+                char** matches = find_matches(buffer, &match_count);
+                if (match_count > 0) {
+                    printf("\n"); // Newline before showing matches
+                    display_matches(matches, match_count);
+                    printf("\n%s%s", build_prompt(), buffer); // Redisplay prompt and current input
+                    fflush(stdout);
+                    for (int i = 0; i < match_count; i++) free(matches[i]);
+                    free(matches);
+                } else {
+                     putchar('\a'); // Bell for no completion
+                     fflush(stdout);
+                }
+            }
+            continue;
+        } else if (c == '\n') {
+            if (is_tty) {
+                putchar('\n');
+                fflush(stdout);
+                tcsetattr(STDIN_FILENO, TCSANOW, &old_tio); // Restore terminal
+            }
+            buffer[position] = '\0';
+            return buffer;
+        } else if ((c == 127 || c == '\b') && position > 0 && is_tty) { // Backspace (127 is DEL)
+            position--;
+            // Move cursor back, print space, move cursor back again
+            printf("\b \b"); 
+            fflush(stdout);
+            buffer[position] = '\0';
+        } else if (isprint(c)) {
+            if (is_tty) {
+                putchar(c);
+                fflush(stdout);
+            }
+            buffer[position] = c;
+            position++;
+        } else if (c == EOF && !is_tty) { // Handle EOF for non-tty case if getchar() returned it
+             buffer[position] = '\0';
+             if (position == 0) { free(buffer); return NULL; }
+             return buffer;
+        }
+
+
+        // Common buffer resizing logic
+        if (position >= bufsize - 1) {
+            bufsize += XSH_RL_BUFSIZE;
+            char *new_buffer = realloc(buffer, sizeof(char) * bufsize);
+            if (!new_buffer) {
+                fprintf(stderr, "xsh: allocation error\n");
+                if (is_tty) tcsetattr(STDIN_FILENO, TCSANOW, &old_tio); // Restore on error
+                free(buffer);
+                exit(EXIT_FAILURE);
+            }
+            buffer = new_buffer;
+        }
+        buffer[position] = '\0'; // Keep buffer null-terminated
+    }
+    // Should not be reached if is_tty, but as a fallback
+    if (is_tty) tcsetattr(STDIN_FILENO, TCSANOW, &old_tio);
+#else  // Other POSIX or fallback (original simple getchar loop)
+    // This part is reached if not _WIN32 and not __linux__
+    while (1) {
+        c = getchar();
+        if (c == EOF || c == '\n') {
+            buffer[position] = '\0';
+            if (c == EOF && position == 0) { free(buffer); return NULL; }
+            return buffer;
+        }
+        buffer[position] = c;
+        position++;
+
+        if (position >= bufsize - 1) {
+            bufsize += XSH_RL_BUFSIZE;
+            char *new_buffer = realloc(buffer, bufsize); // No sizeof(char) needed for realloc with bytes
+            if (!new_buffer) {
+                fprintf(stderr, "xsh: allocation error\n");
+                free(buffer);
+                exit(EXIT_FAILURE);
+            }
+            buffer = new_buffer;
+        }
+        buffer[position] = '\0';
+    }
+#endif
+    return buffer; // Should be unreachable if logic is correct
 }
 
 char** find_matches(const char* partial, int* match_count) {
