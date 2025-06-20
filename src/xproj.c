@@ -24,7 +24,7 @@ static int create_web_project(const char *project_name, const char *project_path
 int xsh_xproj(char **args) {
     if (args[1] == NULL || args[2] == NULL) {
         fprintf(stderr, "xsh: xproj: missing argument\n");
-        fprintf(stderr, "Usage: xproj <project_name> [--git]\n");
+        fprintf(stderr, "Usage: xproj <project_type (c, py, web)> <project_name> [--git]\n");
         return 1;
     }
 

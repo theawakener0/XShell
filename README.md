@@ -56,30 +56,57 @@ The Xenomench project aims to deconstruct the barriers between human intent and 
 
 ### Prerequisites
 
-- A C Compiler (GCC recommended)
-- Make (for using the Makefile)
-- Git (optional, for cloning)
+- C Compiler (GCC or Clang recommended)
+- Make (for automated building)
+- Git (for version control)
+- Network libraries (Windows: ws2_32, iphlpapi)
 
 ### Building XShell
 
-1.  **Clone the repository (or download the source):**
+1. **Get the source code:**
     ```bash
     git clone https://github.com/theawakener0/XShell.git
     cd XShell
     ```
 
-2.  **Compile the project using Make:**
-    This will compile the source files from the `src/` directory, using headers from `include/`, and place the executable in the `bin/` directory.
+2. **Build the project:**
+    
+    **Using Make (recommended):**
+    ```bash
+    make
+    ```
+    
+    **Manual compilation:**
+    - **Linux/macOS:**
+      ```bash
+      mkdir -p bin
+      gcc -Iinclude src/*.c -o bin/Xshell
+      ```
+    
+    - **Windows:**
+      ```bash
+      mkdir bin 2>NUL
+      gcc -Iinclude src\*.c -o bin\Xshell.exe -lws2_32 -liphlpapi
+      ```
 
-    -   **Linux/macOS:**
-        ```bash
-        make
-        ```
-    -   **Windows (MinGW/MSYS2 recommended):**
-        ```bash
-        make
-        ```
-        (If using a different environment, you might need to adjust the `Makefile` or compile manually. The `Makefile` is set up for GCC.)
+3. **Run XShell:**
+    - **Linux/macOS:**
+      ```bash
+      ./bin/Xshell
+      ```
+    - **Windows:**
+      ```bash
+      .\bin\Xshell.exe
+      ```
+
+### Troubleshooting
+
+- **Missing libraries:** Ensure network libraries are installed
+- **Compilation errors:** Verify you have a compatible C compiler (GCC 8+ recommended)
+- **Permission issues:** On Unix-based systems, you may need to add execute permissions:
+  ```bash
+  chmod +x ./bin/Xshell
+  ```
 
 3.  **Run XShell:**
     -   **Linux/macOS:**
