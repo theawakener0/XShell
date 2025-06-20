@@ -22,6 +22,7 @@
     #include <sys/types.h>
     #include <sys/time.h>
     #include <net/if.h>
+    #include <sys/ioctl.h>
     #define SOCKET int
     #define INVALID_SOCKET -1
     #define SOCKET_ERROR -1
