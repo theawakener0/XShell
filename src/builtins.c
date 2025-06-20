@@ -1,7 +1,13 @@
+#include <winsock2.h>
 #include "builtins.h"
 #include "network.h" // For xsh_client, though it's declared in builtins.h for now
 #include "history.h" // For history array and count (declared extern there)
 #include "utils.h" // For utility functions like print_slow, build_prompt
+#include "xproj.h" // For xsh_xproj (project creation command)
+#include "xnote.h" // For xsh_xnote (encrypted note keeper command)
+#include "xpass.h" // For xsh_xpass (password strength analyzer and generator)
+#include "xnet.h"
+#include "xscan.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -17,10 +23,12 @@
 #include <fcntl.h>    // For open (used in touch POSIX)
 #endif
 
+
+
 // Built-in command names
 char *builtin_str[] = {
     "cd", "pwd", "ls", "grep", "echo", "mkdir", "touch", "cp", "mv",
-    "rm", "cat", "xmanifesto", "xeno", "history", "help", "clear", "exit"
+    "rm", "cat", "xmanifesto", "xproj", "xnote", "xpass", "xeno", "xnet", "xscan", "history", "help", "clear", "exit"
 };
 
 // Descriptions for built-in commands (for help)
@@ -37,7 +45,12 @@ char *builtin_desc[] = {
     "Remove files or directories",
     "Concatenate and display file contents",
     "Display the Xenomench Manifesto",
+    "Create a new project structure (C, Python, or Web)",
+    "Encrypted Note Keeper",
+    "Password Strength Analyzer and Generator",
     "Connect you to the Gatekeeper (network client)",
+    "Minimal Network Diagnostic Tools",
+    "Custom Port Scanner",
     "Show command history",
     "Display help information about available commands",
     "Clear the terminal screen",
@@ -58,7 +71,12 @@ char *builtin_usage[] = {
     "Usage: rm <name1> [name2] ...",
     "Usage: cat <file_name> [file_name2] ...",
     "Usage: xmanifesto",
+    "Usage: xproj <project_type (c, py, web)> <project_name> [--git]",
+    "Usage: xnote <command> [options]\nCommands:\n  add <name> \"<content>\" - Create a new note.\n  view <name>             - View a decrypted note.\n  lock <name>             - Encrypt a note with a password.\n  list                    - List all available notes.\n  delete <name>           - Delete a note.",
+    "Usage: xpass <command> [options]\nCommands:\n  gen [length] [--no-upper] [--no-lower] [--no-digits] [--no-symbols] - Generate a password.\n  check <password> - Check the strength of a password.",
     "Usage: xeno [hostname] [port]  (Note: Actual arguments depend on client implementation)",
+    "Usage: xnet [show|ping|traceroute] [host]",
+    "Usage: xscan <target IP> <start port> [end port]",
     "Usage: history",
     "Usage: help [command]",
     "Usage: clear",
@@ -68,7 +86,8 @@ char *builtin_usage[] = {
 // Array of function pointers for built-in commands
 int (*builtin_func[])(char **) = {
     &xsh_cd, &xsh_pwd, &xsh_ls, &xsh_grep, &xsh_echo, &xsh_mkdir, &xsh_touch,
-    &xsh_cp, &xsh_mv, &xsh_rm, &xsh_cat, &xsh_manifesto, &xsh_client, // xsh_client will move
+    &xsh_cp, &xsh_mv, &xsh_rm, &xsh_cat, &xsh_manifesto, &xsh_xproj, &xsh_xnote,
+    &xsh_xpass, &xsh_client, &xsh_xnet, &xsh_xscan,
     &xsh_history, &xsh_help, &xsh_clear, &xsh_exit
 };
 
@@ -456,6 +475,23 @@ int xsh_touch(char **args) {
     return 1;
 }
 
+int xsh_xnet(char **args) {
+    int argc = 0;
+    while(args[argc] != NULL) {
+        argc++;
+    }
+    xnet_main(argc, args);
+    return 1;
+}
+
+int xsh_xscan(char **args) {
+    int argc = 0;
+    while(args[argc] != NULL) {
+        argc++;
+    }
+    xscan_main(argc, args);
+    return 1;
+}
 
 int xsh_manifesto(char **args) {
     const char *lines[] = {

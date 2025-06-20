@@ -28,5 +28,10 @@ int xsh_rm(char **args);
 int xsh_cat(char **args);
 int xsh_manifesto(char **args);
 int xsh_history(char **args); // Note: History management might be expanded into its own module
+int xsh_xnet(char **args);
+int xsh_xproj(char **args);
+int xsh_xnote(char **args);
+int xsh_xpass(char **args);
+int xsh_xscan(char **args);
 
 #endif // BUILTINS_H

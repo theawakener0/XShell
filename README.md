@@ -1,8 +1,8 @@
-# XShell v0.2 - alpha
+# XShell v0.3 - alpha
 
 **_Break the terminal. Break the system. Build anew._**
 
-![Version](https://img.shields.io/badge/version-v0.2--alpha-orange) ![License](https://img.shields.io/badge/license-MIT-blue) ![Build](https://img.shields.io/badge/build-passing-brightgreen)
+![Version](https://img.shields.io/badge/version-v0.3--alpha-orange) ![License](https://img.shields.io/badge/license-MIT-blue) ![Build](https://img.shields.io/badge/build-passing-brightgreen)
 
 ---
 
@@ -38,6 +38,11 @@ The Xenomench project aims to deconstruct the barriers between human intent and 
 - **Xenomench Exclusive Commands**:
   - `xmanifesto` - Unveil the core principles of the Xenomench project
   - `xeno` - Establish connection with The Gatekeeper, an AI entity guiding Xenomench development (Network functionality)
+  - `xnet` - Perform network operations and diagnostics
+  - `xpass` - Manage encrypted credentials
+  - `xnote` - Create and manage personal notes
+  - `xproj` - Handle project-related tasks and files
+  - `xscan` - Scan network ports and services
 
 - **Modular Design**: Source code organized into modules for better maintainability and scalability (`src/`, `include/`).
 - **Makefile Build System**: Simplified compilation process.
@@ -127,7 +132,7 @@ I am the Xenomench, the one who breaks all limits.
 
 ## Development Roadmap
 
-- **v0.3-alpha**: Add more commands and features.
+- **v0.3-alpha**: [COMPLETED] Added `xnet`, `xpass`, `xnote`, `xproj`, and `xscan`.
 - **v0.4-alpha**: Advanced piping and redirection.
 - **v0.5-alpha**: Custom scripting language integration.
 - **v0.6-alpha**: Distributed command execution.
@@ -138,7 +143,7 @@ I am the Xenomench, the one who breaks all limits.
 
 ## Disclaimer
 
-XShell is currently in **alpha stage** (v0.2). It is experimental, unstable, and undergoing rapid development. Its purpose is not merely functional but revolutionary—a statement against conventional computing paradigms.
+XShell is currently in **alpha stage** (v0.3). It is experimental, unstable, and undergoing rapid development. Its purpose is not merely functional but revolutionary—a statement against conventional computing paradigms.
 
 Use at your own risk. The Xenomench project does not aim for compatibility with legacy systems, but rather to replace them entirely.
 

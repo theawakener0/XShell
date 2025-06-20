@@ -17,5 +17,6 @@ void process_grep_stream(FILE *fp, const char *pattern, int case_insensitive, co
 
 // Function prototype for recursive removal
 int remove_recursively_internal(const char *path);
+int create_file_with_content(const char *path, const char *content);
 
 #endif // UTILS_H

@@ -233,3 +233,20 @@ int remove_recursively_internal(const char *path) {
     return 0; // Success
 #endif
 }
+
+int create_file_with_content(const char *path, const char *content) {
+    if (path == NULL || content == NULL) {
+        fprintf(stderr, "xsh: xproj: create_file_with_content: path or content is NULL\n");
+        return -1;
+    }
+
+    FILE *fp = fopen(path, "w");
+    if (fp == NULL) {
+        fprintf(stderr, "xsh: xproj: cannot create file '%s': ", path);
+        perror("fopen");
+        return -1;
+    }
+    fprintf(fp, "%s", content);
+    fclose(fp);
+    return 0;
+}
