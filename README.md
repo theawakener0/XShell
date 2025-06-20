@@ -85,7 +85,7 @@ The Xenomench project aims to deconstruct the barriers between human intent and 
     
     - **Windows:**
       ```bash
-      mkdir bin 2>NUL
+      mkdir bin
       gcc -Iinclude src\*.c -o bin\Xshell.exe -lws2_32 -liphlpapi
       ```
 

@@ -1,3 +1,12 @@
+#ifdef _WIN32
+#include <winsock2.h> // For Windows socket functions
+#include <direct.h> // For _mkdir, _getcwd
+#include <io.h>     // For _access (if needed for file checks)
+#else
+#include <sys/stat.h> // For mkdir (POSIX)
+#include <fcntl.h>    // For open (used in touch POSIX)
+#endif
+
 #include "builtins.h"
 #include "network.h" // For xsh_client, though it's declared in builtins.h for now
 #include "history.h" // For history array and count (declared extern there)
@@ -14,14 +23,7 @@
 #include <dirent.h> // For opendir, readdir, closedir (used indirectly by ls or completion)
 #include <ctype.h>  // For tolower (needed for case-insensitive grep)
 
-#ifdef _WIN32
-#include <winsock2.h>
-#include <direct.h> // For _mkdir, _getcwd
-#include <io.h>     // For _access (if needed for file checks)
-#else
-#include <sys/stat.h> // For mkdir (POSIX)
-#include <fcntl.h>    // For open (used in touch POSIX)
-#endif
+
 
 
 
