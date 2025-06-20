@@ -52,6 +52,16 @@ The Xenomench project aims to deconstruct the barriers between human intent and 
 
 ---
 
+## Demo
+
+A quick look at XShell in action:
+
+![XShell Demo](demo/XShell.jpg)
+
+[Watch the full video demo (MP4)](demo/XShell_Demo.mp4)
+
+---
+
 ## Installation
 
 ### Prerequisites
