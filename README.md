@@ -80,7 +80,7 @@ The Xenomench project aims to deconstruct the barriers between human intent and 
     - **Linux/macOS:**
       ```bash
       mkdir -p bin
-      gcc -Iinclude src/*.c -o bin/Xshell
+      gcc -Iinclude src/*.c -o bin/Xshell -lm
       ```
     
     - **Windows:**
