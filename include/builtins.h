@@ -33,5 +33,6 @@ int xsh_xproj(char **args);
 int xsh_xnote(char **args);
 int xsh_xpass(char **args);
 int xsh_xscan(char **args);
+int xsh_xcrypt(char **args); // Simple file encryption/decryption tool
 
 #endif // BUILTINS_H

@@ -16,6 +16,7 @@
 #include "xpass.h" // For xsh_xpass (password strength analyzer and generator)
 #include "xnet.h"
 #include "xscan.h"
+#include "xcrypt.h" // For xsh_xcrypt (file encryption/decryption tool)
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -30,7 +31,7 @@
 // Built-in command names
 char *builtin_str[] = {
     "cd", "pwd", "ls", "grep", "echo", "mkdir", "touch", "cp", "mv",
-    "rm", "cat", "xmanifesto", "xproj", "xnote", "xpass", "xeno", "xnet", "xscan", "history", "help", "clear", "exit"
+    "rm", "cat", "xmanifesto", "xproj", "xnote", "xpass", "xeno", "xnet", "xscan", "xcrypt", "history", "help", "clear", "exit"
 };
 
 // Descriptions for built-in commands (for help)
@@ -53,6 +54,7 @@ char *builtin_desc[] = {
     "Connect you to the Gatekeeper (network client)",
     "Minimal Network Diagnostic Tools",
     "Custom Port Scanner",
+    "Simple file encryption/decryption tool",
     "Show command history",
     "Display help information about available commands",
     "Clear the terminal screen",
@@ -79,6 +81,7 @@ char *builtin_usage[] = {
     "Usage: xeno [hostname] [port]  (Note: Actual arguments depend on client implementation)",
     "Usage: xnet [show|ping|traceroute] [host]",
     "Usage: xscan <target IP> <start port> [end port]",
+    "Usage: xcrypt <encrypt|decrypt> <input_file> <output_file>\nNote: 'encrypt' and 'decrypt' use the same symmetric XOR operation.",
     "Usage: history",
     "Usage: help [command]",
     "Usage: clear",
@@ -89,7 +92,7 @@ char *builtin_usage[] = {
 int (*builtin_func[])(char **) = {
     &xsh_cd, &xsh_pwd, &xsh_ls, &xsh_grep, &xsh_echo, &xsh_mkdir, &xsh_touch,
     &xsh_cp, &xsh_mv, &xsh_rm, &xsh_cat, &xsh_manifesto, &xsh_xproj, &xsh_xnote,
-    &xsh_xpass, &xsh_client, &xsh_xnet, &xsh_xscan,
+    &xsh_xpass, &xsh_client, &xsh_xnet, &xsh_xscan, &xsh_xcrypt,
     &xsh_history, &xsh_help, &xsh_clear, &xsh_exit
 };
 
