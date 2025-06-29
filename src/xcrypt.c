@@ -31,6 +31,11 @@ int xsh_xcrypt(char **args) {
     const char *mode = args[1];
     const char *input_file = args[2];
     const char *output_file = args[3];
+    // Prevent overwriting the input file
+    if (strcmp(input_file, output_file) == 0) {
+        fprintf(stderr, "xsh: xcrypt: input and output files must not be the same.\n");
+        return 1;
+    }
     
     char password[XSH_MAXLINE];
     char password_confirm[XSH_MAXLINE];

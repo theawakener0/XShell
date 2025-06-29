@@ -43,6 +43,8 @@ The Xenomench project aims to deconstruct the barriers between human intent and 
   - `xnote` - Create and manage personal notes
   - `xproj` - Handle project-related tasks and files
   - `xscan` - Scan network ports and services
+  - `xcrypt` - Encrypt or decrypt files with a password
+  - `xcodex` - A simple, POSIX-only text editor (Windows support coming soon)
 
 - **Modular Design**: Source code organized into modules for better maintainability and scalability (`src/`, `include/`).
 - **Makefile Build System**: Simplified compilation process.
@@ -169,7 +171,7 @@ I am the Xenomench, the one who breaks all limits.
 
 ## Development Roadmap
 
-- **v0.3-alpha**: [COMPLETED] Added `xnet`, `xpass`, `xnote`, `xproj`, and `xscan`.
+- **v0.3-alpha**: [COMPLETED] Added `xnet`, `xpass`, `xnote`, `xproj`, `xscan` and `xcrypt`.
 - **v0.4-alpha**: Advanced piping and redirection.
 - **v0.5-alpha**: Custom scripting language integration.
 - **v0.6-alpha**: Distributed command execution.

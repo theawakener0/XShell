@@ -1,38 +1,10 @@
-/* Kilo -- A very simple editor in less than 1-kilo lines of code (as counted
- *         by "cloc"). Does not depend on libcurses, directly emits VT100
- *         escapes on the terminal.
- *
- * -----------------------------------------------------------------------
- *
- * Copyright (C) 2016 Salvatore Sanfilippo <antirez at gmail dot com>
- *
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are
- * met:
- *
- *  *  Redistributions of source code must retain the above copyright
- *     notice, this list of conditions and the following disclaimer.
- *
- *  *  Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- * HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- */
+// This file is part of the XShell project, a simple terminal editor based on kilo
 
 #define XCODEX_VERSION "0.1"
+
+/* POSIX-only feature */
+#if !defined(_WIN32) && !defined(_WIN64)
+#define XCODEX_ENABLED 1
 
 #ifdef __linux__
 #define _POSIX_C_SOURCE 200809L
@@ -212,6 +184,13 @@ void disableRawMode(int fd) {
 /* Called at exit to avoid remaining in raw mode. */
 void editorAtExit(void) {
     disableRawMode(STDIN_FILENO);
+    /* Clear the screen and reposition cursor at top-left on exit. */
+    if (write(STDOUT_FILENO, "\x1b[2J", 4) == -1) {
+        perror("write");
+    }
+    if (write(STDOUT_FILENO, "\x1b[H", 3) == -1) {
+        perror("write");
+    }
 }
 
 /* Raw mode: 1960 magic shit. */
@@ -873,7 +852,7 @@ void abAppend(struct abuf *ab, const char *s, int len) {
     ab->len += len;
 }
 
-void abFree(struct abuf *ab) {
+void abFree(struct abbuf *ab) {
     free(ab->b);
 }
 
@@ -1260,7 +1239,7 @@ int editorFileWasModified(void) {
 
 void updateWindowSize(void) {
     if (getWindowSize(STDIN_FILENO,STDOUT_FILENO,
-                      &E.screenrows,&E.screencols) == -1) {
+                    &E.screenrows,&E.screencols) == -1) {
         perror("Unable to query the screen for size (columns / rows)");
         exit(1);
     }
@@ -1288,21 +1267,33 @@ void initEditor(void) {
     signal(SIGWINCH, handleSigWinCh);
 }
 
-int main(int argc, char **argv) {
+int xcodex_main(int argc, char **argv) {
     if (argc != 2) {
-        fprintf(stderr,"Usage: kilo <filename>\n");
-        exit(1);
+        fprintf(stderr,"Usage: xcodex <filename>\n");
+        return 1;
     }
 
     initEditor();
     editorSelectSyntaxHighlight(argv[1]);
     editorOpen(argv[1]);
-    enableRawMode(STDIN_FILENO);
+    if (enableRawMode(STDIN_FILENO) == -1) return 1;
     editorSetStatusMessage(
         "HELP: Ctrl-S = save | Ctrl-Q = quit | Ctrl-F = find");
     while(1) {
         editorRefreshScreen();
         editorProcessKeypress(STDIN_FILENO);
     }
-    return 0;
+    
+    return 1;
 }
+
+#else
+
+#include <stdio.h>
+
+int XcodexMain(int argc, char **argv) {
+    printf("XCodex editor is only available on POSIX systems.\n");
+    return 1;
+}
+
+#endif
