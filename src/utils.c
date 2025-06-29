@@ -128,6 +128,7 @@ void process_grep_stream(FILE *fp, const char *pattern, int case_insensitive, co
             fputs(line, stdout);
         }
     }
+    printf("\n");
 }
 
 // Function to recursively remove files and directories
