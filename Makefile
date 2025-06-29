@@ -12,6 +12,7 @@ OBJ_DIR = obj
 BIN_DIR = bin
 
 # Automatically find all .c files and generate corresponding .o and .d file names
+# Note: src/xcodex.c contains platform-specific code and will be compiled conditionally.
 SOURCES = $(wildcard $(SRC_DIR)/*.c)
 OBJECTS = $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(SOURCES))
 DEPS = $(OBJECTS:.o=.d) # Dependency files for header tracking

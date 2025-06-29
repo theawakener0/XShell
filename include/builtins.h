@@ -34,5 +34,6 @@ int xsh_xnote(char **args);
 int xsh_xpass(char **args);
 int xsh_xscan(char **args);
 int xsh_xcrypt(char **args); // Simple file encryption/decryption tool
+int xsh_xcodex(char **args); // Simple text editor for POSIX systems only
 
 #endif // BUILTINS_H

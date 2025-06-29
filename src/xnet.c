@@ -358,15 +358,21 @@ void ping(char *host) {
     CLOSE_SOCKET(sock);
 }
 
-void xnet_main(int argc, char **argv) {
+int xnet_main(int argc, char **argv) {
 #ifdef _WIN32
     WSADATA wsaData;
     int iResult = WSAStartup(MAKEWORD(2, 2), &wsaData);
     if (iResult != 0) {
         printf("WSAStartup failed: %d\n", iResult);
-        return;
+        return 1;
     }
 #endif
+
+    if (argc < 2) {
+        printf("Usage: xnet <command> [args]\n");
+        printf("Available commands: show, ping <host>, traceroute <host>\n");
+        return 0;
+    }
 
     if (argc > 1) {
         if (strcmp(argv[1], "show") == 0) {
@@ -393,4 +399,5 @@ void xnet_main(int argc, char **argv) {
 #ifdef _WIN32
     WSACleanup();
 #endif
+    return 0;
 }

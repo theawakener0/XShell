@@ -16,6 +16,7 @@
 #include "xpass.h" // For xsh_xpass (password strength analyzer and generator)
 #include "xnet.h"
 #include "xscan.h"
+#include "xcodex.h" // For xsh_xcodex (text editor command, POSIX only)
 #include "xcrypt.h" // For xsh_xcrypt (file encryption/decryption tool)
 #include <stdio.h>
 #include <stdlib.h>
@@ -31,7 +32,7 @@
 // Built-in command names
 char *builtin_str[] = {
     "cd", "pwd", "ls", "grep", "echo", "mkdir", "touch", "cp", "mv",
-    "rm", "cat", "xmanifesto", "xproj", "xnote", "xpass", "xeno", "xnet", "xscan", "xcrypt", "history", "help", "clear", "exit"
+    "rm", "cat", "xmanifesto", "xproj", "xnote", "xpass", "xeno", "xnet", "xscan", "xcodex", "xcrypt", "history", "help", "clear", "exit"
 };
 
 // Descriptions for built-in commands (for help)
@@ -54,6 +55,7 @@ char *builtin_desc[] = {
     "Connect you to the Gatekeeper (network client)",
     "Minimal Network Diagnostic Tools",
     "Custom Port Scanner",
+    "Simple text editor for POSIX systems (XShell only)",
     "Simple file encryption/decryption tool",
     "Show command history",
     "Display help information about available commands",
@@ -81,6 +83,7 @@ char *builtin_usage[] = {
     "Usage: xeno [hostname] [port]  (Note: Actual arguments depend on client implementation)",
     "Usage: xnet [show|ping|traceroute] [host]",
     "Usage: xscan <target IP> <start port> [end port]",
+    "Usage: xsh_xcodex <file_name>\nNote: This command is only available on POSIX systems.",
     "Usage: xcrypt <encrypt|decrypt> <input_file> <output_file>\nNote: 'encrypt' and 'decrypt' use the same symmetric XOR operation.",
     "Usage: history",
     "Usage: help [command]",
@@ -92,7 +95,7 @@ char *builtin_usage[] = {
 int (*builtin_func[])(char **) = {
     &xsh_cd, &xsh_pwd, &xsh_ls, &xsh_grep, &xsh_echo, &xsh_mkdir, &xsh_touch,
     &xsh_cp, &xsh_mv, &xsh_rm, &xsh_cat, &xsh_manifesto, &xsh_xproj, &xsh_xnote,
-    &xsh_xpass, &xsh_client, &xsh_xnet, &xsh_xscan, &xsh_xcrypt,
+    &xsh_xpass, &xsh_client, &xsh_xnet, &xsh_xscan, &xsh_xcodex, &xsh_xcrypt,
     &xsh_history, &xsh_help, &xsh_clear, &xsh_exit
 };
 
@@ -327,11 +330,13 @@ int xsh_cat(char **args) {
         while (fgets(line, sizeof(line), fp)) {
             fputs(line, stdout);
         }
+        printf("\n");
+         
         if (ferror(fp)) {
             fprintf(stderr, "xsh: cat: error reading file '%s'\n", args[i]);
         }
         if (fclose(fp) == EOF) {
-            fprintf(stderr, "xsh: cat: error closing '%s': ", args[i]);
+            fprintf(stderr, "xsh: cat: error closing '%s': \n", args[i]);
             perror("");
         }
     }
@@ -345,7 +350,7 @@ int xsh_grep(char **args) {
     int first_file_arg_index = -1;
 
     if (args[1] == NULL) { // No arguments after "grep"
-        fprintf(stderr, "xsh: grep: missing pattern\nUsage: grep [-i] <pattern> [file...]");
+        fprintf(stderr, "xsh: grep: missing pattern\nUsage: grep [-i] <pattern> [file...]\n");
         return 1;
     }
 
@@ -356,14 +361,14 @@ int xsh_grep(char **args) {
             case_insensitive = 1;
             current_arg_idx++;
         } else {
-            fprintf(stderr, "xsh: grep: unknown option %s\nUsage: grep [-i] <pattern> [file...]", args[current_arg_idx]);
+            fprintf(stderr, "xsh: grep: unknown option %s\nUsage: grep [-i] <pattern> [file...]\n", args[current_arg_idx]);
             return 1;
         }
     }
 
     // Next argument is the pattern
     if (args[current_arg_idx] == NULL) {
-        fprintf(stderr, "xsh: grep: missing pattern after options\nUsage: grep [-i] <pattern> [file...]");
+        fprintf(stderr, "xsh: grep: missing pattern after options\nUsage: grep [-i] <pattern> [file...]\n");
         return 1;
     }
     pattern_arg = args[current_arg_idx];
@@ -397,13 +402,13 @@ int xsh_grep(char **args) {
         for (int i = first_file_arg_index; args[i] != NULL; i++) {
             FILE *fp = fopen(args[i], "r");
             if (fp == NULL) {
-                fprintf(stderr, "xsh: grep: %s: ", args[i]);
+                fprintf(stderr, "xsh: grep: %s: \n", args[i]);
                 perror("");
                 continue; // Standard grep continues with other files
             }
             process_grep_stream(fp, actual_pattern, case_insensitive, print_filenames_flag ? args[i] : NULL);
             if (fclose(fp) == EOF) {
-                fprintf(stderr, "xsh: grep: error closing %s: ", args[i]);
+                fprintf(stderr, "xsh: grep: error closing %s: \n", args[i]);
                 perror("");
             }
         }
@@ -496,6 +501,18 @@ int xsh_xscan(char **args) {
     }
     xscan_main(argc, args);
     return 1;
+}
+
+int xsh_xcodex(char **args) {
+    int argc = 0;
+    while(args[argc] != NULL) {
+        argc++;
+    }
+#if defined(XCODEX_ENABLED)
+    return xcodex_main(argc, args);
+#else
+    return XcodexMain(argc, args);
+#endif
 }
 
 int xsh_manifesto(char **args) {
