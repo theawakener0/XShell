@@ -324,11 +324,13 @@ int xsh_cat(char **args) {
         while (fgets(line, sizeof(line), fp)) {
             fputs(line, stdout);
         }
+        printf("\n");
+         
         if (ferror(fp)) {
             fprintf(stderr, "xsh: cat: error reading file '%s'\n", args[i]);
         }
         if (fclose(fp) == EOF) {
-            fprintf(stderr, "xsh: cat: error closing '%s': ", args[i]);
+            fprintf(stderr, "xsh: cat: error closing '%s': \n", args[i]);
             perror("");
         }
     }
@@ -342,7 +344,7 @@ int xsh_grep(char **args) {
     int first_file_arg_index = -1;
 
     if (args[1] == NULL) { // No arguments after "grep"
-        fprintf(stderr, "xsh: grep: missing pattern\nUsage: grep [-i] <pattern> [file...]");
+        fprintf(stderr, "xsh: grep: missing pattern\nUsage: grep [-i] <pattern> [file...]\n");
         return 1;
     }
 
@@ -353,14 +355,14 @@ int xsh_grep(char **args) {
             case_insensitive = 1;
             current_arg_idx++;
         } else {
-            fprintf(stderr, "xsh: grep: unknown option %s\nUsage: grep [-i] <pattern> [file...]", args[current_arg_idx]);
+            fprintf(stderr, "xsh: grep: unknown option %s\nUsage: grep [-i] <pattern> [file...]\n", args[current_arg_idx]);
             return 1;
         }
     }
 
     // Next argument is the pattern
     if (args[current_arg_idx] == NULL) {
-        fprintf(stderr, "xsh: grep: missing pattern after options\nUsage: grep [-i] <pattern> [file...]");
+        fprintf(stderr, "xsh: grep: missing pattern after options\nUsage: grep [-i] <pattern> [file...]\n");
         return 1;
     }
     pattern_arg = args[current_arg_idx];
@@ -394,13 +396,13 @@ int xsh_grep(char **args) {
         for (int i = first_file_arg_index; args[i] != NULL; i++) {
             FILE *fp = fopen(args[i], "r");
             if (fp == NULL) {
-                fprintf(stderr, "xsh: grep: %s: ", args[i]);
+                fprintf(stderr, "xsh: grep: %s: \n", args[i]);
                 perror("");
                 continue; // Standard grep continues with other files
             }
             process_grep_stream(fp, actual_pattern, case_insensitive, print_filenames_flag ? args[i] : NULL);
             if (fclose(fp) == EOF) {
-                fprintf(stderr, "xsh: grep: error closing %s: ", args[i]);
+                fprintf(stderr, "xsh: grep: error closing %s: \n", args[i]);
                 perror("");
             }
         }
