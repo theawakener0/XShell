@@ -852,7 +852,7 @@ void abAppend(struct abuf *ab, const char *s, int len) {
     ab->len += len;
 }
 
-void abFree(struct abbuf *ab) {
+void abFree(struct abuf *ab) {
     free(ab->b);
 }
 
