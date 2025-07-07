@@ -33,9 +33,17 @@
 #define HL_MLCOMMENT 3 /* Multi-line comment. */
 #define HL_KEYWORD1 4
 #define HL_KEYWORD2 5
-#define HL_STRING 6
-#define HL_NUMBER 7
-#define HL_MATCH 8      /* Search match. */
+#define HL_KEYWORD3 6
+#define HL_STRING 7
+#define HL_NUMBER 8
+#define HL_MATCH 9     /* Search match. */
+#define HL_FUNCTION 10
+#define HL_OPERATOR 11
+#define HL_PREPROCESSOR 12
+#define HL_BRACKET 13
+#define HL_CONSTANT 14
+#define HL_VARIABLE 15
+#define HL_ERROR 16 /* Error in syntax highlight. */
 
 #define HL_HIGHLIGHT_STRINGS (1<<0)
 #define HL_HIGHLIGHT_NUMBERS (1<<1)
@@ -48,6 +56,120 @@ struct editorSyntax {
     char multiline_comment_end[3];
     int flags;
 };
+
+/* Theme definitions */
+typedef struct {
+    char *name;
+    int colors[17];  /* Colors for each highlight type */
+    int bg_color;
+    int cursor_color;
+    int status_bg;
+    int status_fg;
+} theme_t;
+
+/* Neovim-inspired themes */
+theme_t themes[] = {
+    {
+        "xcodex_dark",
+        {
+            37,  /* HL_NORMAL - light grey */
+            90,  /* HL_NONPRINT - dark grey */
+            244, /* HL_COMMENT - grey */
+            244, /* HL_MLCOMMENT - grey */
+            207, /* HL_KEYWORD1 - magenta */
+            108, /* HL_KEYWORD2 - green */
+            81,  /* HL_KEYWORD3 - cyan */
+            114, /* HL_STRING - light green */
+            209, /* HL_NUMBER - orange */
+            220, /* HL_MATCH - yellow */
+            81,  /* HL_FUNCTION - cyan */
+            204, /* HL_OPERATOR - red */
+            175, /* HL_PREPROCESSOR - purple */
+            248, /* HL_BRACKET - white */
+            209, /* HL_CONSTANT - orange */
+            146, /* HL_VARIABLE - light purple */
+            196  /* HL_ERROR - bright red */
+        },
+        0,   /* bg_color */
+        15,  /* cursor_color */
+        236, /* status_bg */
+        248  /* status_fg */
+    },
+    {
+        "xcodex_light",
+        {
+            16,  /* HL_NORMAL - black */
+            240, /* HL_NONPRINT - dark grey */
+            102, /* HL_COMMENT - blue grey */
+            102, /* HL_MLCOMMENT - blue grey */
+            127, /* HL_KEYWORD1 - purple */
+            28,  /* HL_KEYWORD2 - dark green */
+            30,  /* HL_KEYWORD3 - dark cyan */
+            22,  /* HL_STRING - dark green */
+            166, /* HL_NUMBER - orange */
+            220, /* HL_MATCH - yellow */
+            30,  /* HL_FUNCTION - dark cyan */
+            124, /* HL_OPERATOR - dark red */
+            90,  /* HL_PREPROCESSOR - purple */
+            16,  /* HL_BRACKET - black */
+            166, /* HL_CONSTANT - orange */
+            55,  /* HL_VARIABLE - purple */
+            196  /* HL_ERROR - red */
+        },
+        15,  /* bg_color */
+        0,   /* cursor_color */
+        252, /* status_bg */
+        16   /* status_fg */
+    },
+    {
+        "gruvbox_dark",
+        {
+            223, /* HL_NORMAL - light cream */
+            245, /* HL_NONPRINT - grey */
+            245, /* HL_COMMENT - grey */
+            245, /* HL_MLCOMMENT - grey */
+            167, /* HL_KEYWORD1 - red */
+            142, /* HL_KEYWORD2 - green */
+            108, /* HL_KEYWORD3 - blue */
+            214, /* HL_STRING - yellow */
+            208, /* HL_NUMBER - orange */
+            172, /* HL_MATCH - orange */
+            108, /* HL_FUNCTION - blue */
+            208, /* HL_OPERATOR - orange */
+            175, /* HL_PREPROCESSOR - purple */
+            223, /* HL_BRACKET - cream */
+            208, /* HL_CONSTANT - orange */
+            142, /* HL_VARIABLE - green */
+            167  /* HL_ERROR - red */
+        },
+        235, /* bg_color */
+        223, /* cursor_color */
+        237, /* status_bg */
+        223  /* status_fg */
+    }
+};
+
+static int current_theme = 0;
+#define NUM_THEMES (sizeof(themes) / sizeof(themes[0]))
+
+/*Maps syntax highlight token types to themed colors*/
+int editorSyntaxToColor(int hl) {
+    if (hl >= 0 && hl < 17) {
+        return themes[current_theme].colors[hl];
+    }
+    return themes[current_theme].colors[HL_NORMAL];
+}
+
+/*Theme switching function*/
+void editorSwitchTheme(int theme_index) {
+    if (theme_index < 0 || theme_index >= NUM_THEMES) {
+        fprintf(stderr, "Invalid theme index: %d\n", theme_index);
+        return;
+    }
+    current_theme = theme_index;
+    /* Update the status message to reflect the new theme */
+    editorSetStatusMessage("Switched to theme: %s", themes[current_theme].name);
+}
 
 /* This structure represents a single line of the file we are editing. */
 typedef struct erow {
@@ -94,6 +216,7 @@ enum KEY_ACTION{
         ENTER = 13,         /* Enter */
         CTRL_Q = 17,        /* Ctrl-q */
         CTRL_S = 19,        /* Ctrl-s */
+        CTRL_T = 20,        /* Ctrl-t */
         CTRL_U = 21,        /* Ctrl-u */
         ESC = 27,           /* Escape */
         BACKSPACE =  127,   /* Backspace */
@@ -136,23 +259,56 @@ void editorSetStatusMessage(const char *fmt, ...);
 /* C / C++ */
 char *C_HL_extensions[] = {".c",".h",".cpp",".hpp",".cc",NULL};
 char *C_HL_keywords[] = {
-	/* C Keywords */
-	"auto","break","case","continue","default","do","else","enum",
-	"extern","for","goto","if","register","return","sizeof","static",
-	"struct","switch","typedef","union","volatile","while","NULL",
+    /* C Keywords (HL_KEYWORD1) */
+    "auto","break","case","continue","default","do","else","enum",
+    "extern","for","goto","if","register","return","sizeof","static",
+    "struct","switch","typedef","union","volatile","while",
+    "const","inline","restrict","_Alignas","_Alignof","_Atomic",
+    "_Bool","_Complex","_Generic","_Imaginary","_Noreturn","_Static_assert",
+    "_Thread_local",
 
-	/* C++ Keywords */
-	"alignas","alignof","and","and_eq","asm","bitand","bitor","class",
-	"compl","constexpr","const_cast","deltype","delete","dynamic_cast",
-	"explicit","export","false","friend","inline","mutable","namespace",
-	"new","noexcept","not","not_eq","nullptr","operator","or","or_eq",
-	"private","protected","public","reinterpret_cast","static_assert",
-	"static_cast","template","this","thread_local","throw","true","try",
-	"typeid","typename","virtual","xor","xor_eq",
+    /* C++ Keywords (HL_KEYWORD1) */
+    "alignas","alignof","and","and_eq","asm","bitand","bitor","class",
+    "compl","constexpr","const_cast","deltype","delete","dynamic_cast",
+    "explicit","export","false","friend","inline","mutable","namespace",
+    "new","noexcept","not","not_eq","nullptr","operator","or","or_eq",
+    "private","protected","public","reinterpret_cast","static_assert",
+    "static_cast","template","this","thread_local","throw","true","try",
+    "typeid","typename","virtual","xor","xor_eq","catch",
+    "concept","consteval","constinit","co_await","co_return","co_yield",
+    "decltype","final","import","module","override","requires",
 
-	/* C types */
-        "int|","long|","double|","float|","char|","unsigned|","signed|",
-        "void|","short|","auto|","const|","bool|",NULL
+    /* C types (HL_KEYWORD2) */
+    "int|","long|","double|","float|","char|","unsigned|","signed|",
+    "void|","short|","auto|","const|","bool|","size_t|","uint8_t|",
+    "uint16_t|","uint32_t|","uint64_t|","int8_t|","int16_t|","int32_t|","int64_t|",
+    "wchar_t|","char16_t|","char32_t|","ptrdiff_t|","ssize_t|","intptr_t|",
+    "uintptr_t|","FILE|","time_t|","clock_t|","va_list|","jmp_buf|",
+    "sig_atomic_t|","fpos_t|","div_t|","ldiv_t|","intmax_t|","uintmax_t|",
+    "float_t|","double_t|","complex|","_Complex|","_Bool|","_Atomic|",
+    "int_least8_t|","int_least16_t|","int_least32_t|","int_least64_t|",
+    "uint_least8_t|","uint_least16_t|","uint_least32_t|","uint_least64_t|",
+    "int_fast8_t|","int_fast16_t|","int_fast32_t|","int_fast64_t|",
+    "uint_fast8_t|","uint_fast16_t|","uint_fast32_t|","uint_fast64_t|",
+
+    /* Built-in functions and constants (HL_KEYWORD3) */
+    "printf||","scanf||","malloc||","free||","sizeof||","strlen||",
+    "strcpy||","strcmp||","NULL||","TRUE||","FALSE||","EOF||",
+    "stdin||","stdout||","stderr||",
+    "calloc||","realloc||","memset||","memcpy||","memmove||",
+    "fopen||","fclose||","fread||","fwrite||","fprintf||","fscanf||",
+    "fgets||","fputs||","fseek||","ftell||","rewind||","fflush||",
+    "isalpha||","isdigit||","isalnum||","isspace||","tolower||","toupper||",
+    "atoi||","atol||","atof||","strtol||","strtod||","strtok||",
+    "strcat||","strstr||","strchr||","strrchr||","strncpy||","strncat||",
+    "strncmp||","strpbrk||","strspn||","strcspn||","strerror||",
+    "abs||","labs||","div||","ldiv||","rand||","srand||","exit||",
+    "qsort||","bsearch||","assert||","setjmp||","longjmp||","signal||",
+    "time||","difftime||","clock||","localtime||","gmtime||","mktime||",
+    "CHAR_BIT||","CHAR_MAX||","CHAR_MIN||","INT_MAX||","INT_MIN||",
+    "LONG_MAX||","LONG_MIN||","LLONG_MAX||","LLONG_MIN||","RAND_MAX||",
+    "BUFSIZ||","FILENAME_MAX||","FOPEN_MAX||","TMP_MAX||","EXIT_SUCCESS||","EXIT_FAILURE||",
+    NULL
 };
 
 /* Here we define an array of syntax highlights by extensions, keywords,
@@ -362,40 +518,46 @@ void editorUpdateSyntax(erow *row) {
     row->hl = realloc(row->hl,row->rsize);
     memset(row->hl,HL_NORMAL,row->rsize);
 
-    if (E.syntax == NULL) return; /* No syntax, everything is HL_NORMAL. */
+    if (E.syntax == NULL) return;
 
-    int i, prev_sep, in_string, in_comment;
+    int i, prev_sep, in_string, in_comment, in_char;
     char *p;
     char **keywords = E.syntax->keywords;
     char *scs = E.syntax->singleline_comment_start;
     char *mcs = E.syntax->multiline_comment_start;
     char *mce = E.syntax->multiline_comment_end;
 
-    /* Point to the first non-space char. */
     p = row->render;
-    i = 0; /* Current char offset */
+    i = 0;
     while(*p && isspace(*p)) {
         p++;
         i++;
     }
-    prev_sep = 1; /* Tell the parser if 'i' points to start of word. */
-    in_string = 0; /* Are we inside "" or '' ? */
-    in_comment = 0; /* Are we inside multi-line comment? */
+    prev_sep = 1;
+    in_string = 0;
+    in_char = 0;
+    in_comment = 0;
 
-    /* If the previous line has an open comment, this line starts
-     * with an open comment state. */
     if (row->idx > 0 && editorRowHasOpenComment(&E.row[row->idx-1]))
         in_comment = 1;
 
     while(*p) {
-        /* Handle // comments. */
+        /* Handle preprocessor directives */
+        if (i == 0 && *p == '#') {
+            while(*p && *p != '\n') {
+                row->hl[i] = HL_PREPROCESSOR;
+                p++; i++;
+            }
+            continue;
+        }
+
+        /* Handle single line comments */
         if (prev_sep && *p == scs[0] && *(p+1) == scs[1]) {
-            /* From here to end is a comment */
             memset(row->hl+i,HL_COMMENT,row->size-i);
             return;
         }
 
-        /* Handle multi line comments. */
+        /* Handle multi line comments */
         if (in_comment) {
             row->hl[i] = HL_MLCOMMENT;
             if (*p == mce[0] && *(p+1) == mce[1]) {
@@ -418,8 +580,8 @@ void editorUpdateSyntax(erow *row) {
             continue;
         }
 
-        /* Handle "" and '' */
-        if (in_string) {
+        /* Handle strings and character literals */
+        if (in_string || in_char) {
             row->hl[i] = HL_STRING;
             if (*p == '\\') {
                 row->hl[i+1] = HL_STRING;
@@ -427,12 +589,20 @@ void editorUpdateSyntax(erow *row) {
                 prev_sep = 0;
                 continue;
             }
-            if (*p == in_string) in_string = 0;
+            if (*p == in_string || *p == in_char) {
+                in_string = in_char = 0;
+            }
             p++; i++;
             continue;
         } else {
-            if (*p == '"' || *p == '\'') {
+            if (*p == '"') {
                 in_string = *p;
+                row->hl[i] = HL_STRING;
+                p++; i++;
+                prev_sep = 0;
+                continue;
+            } else if (*p == '\'') {
+                in_char = *p;
                 row->hl[i] = HL_STRING;
                 p++; i++;
                 prev_sep = 0;
@@ -440,7 +610,23 @@ void editorUpdateSyntax(erow *row) {
             }
         }
 
-        /* Handle non printable chars. */
+        /* Handle operators */
+        if (strchr("+-*/%=<>!&|^~?:", *p)) {
+            row->hl[i] = HL_OPERATOR;
+            p++; i++;
+            prev_sep = 1;
+            continue;
+        }
+
+        /* Handle brackets */
+        if (strchr("(){}[]", *p)) {
+            row->hl[i] = HL_BRACKET;
+            p++; i++;
+            prev_sep = 1;
+            continue;
+        }
+
+        /* Handle non printable chars */
         if (!isprint(*p)) {
             row->hl[i] = HL_NONPRINT;
             p++; i++;
@@ -457,19 +643,37 @@ void editorUpdateSyntax(erow *row) {
             continue;
         }
 
-        /* Handle keywords and lib calls */
+        /* Handle function calls */
+        if (prev_sep && isalpha(*p)) {
+            int j = i;
+            while (j < row->rsize && (isalnum(row->render[j]) || row->render[j] == '_')) {
+                j++;
+            }
+            if (j < row->rsize && row->render[j] == '(') {
+                memset(row->hl+i, HL_FUNCTION, j-i);
+                p += (j-i);
+                i = j;
+                prev_sep = 0;
+                continue;
+            }
+        }
+
+        /* Handle keywords */
         if (prev_sep) {
             int j;
             for (j = 0; keywords[j]; j++) {
                 int klen = strlen(keywords[j]);
                 int kw2 = keywords[j][klen-1] == '|';
-                if (kw2) klen--;
+                int kw3 = kw2 && keywords[j][klen-2] == '|';
+                
+                if (kw3) klen -= 2;
+                else if (kw2) klen--;
 
                 if (!memcmp(p,keywords[j],klen) &&
                     is_separator(*(p+klen)))
                 {
-                    /* Keyword */
-                    memset(row->hl+i,kw2 ? HL_KEYWORD2 : HL_KEYWORD1,klen);
+                    int hl_type = kw3 ? HL_KEYWORD3 : (kw2 ? HL_KEYWORD2 : HL_KEYWORD1);
+                    memset(row->hl+i, hl_type, klen);
                     p += klen;
                     i += klen;
                     break;
@@ -477,18 +681,14 @@ void editorUpdateSyntax(erow *row) {
             }
             if (keywords[j] != NULL) {
                 prev_sep = 0;
-                continue; /* We had a keyword match */
+                continue;
             }
         }
 
-        /* Not special chars */
         prev_sep = is_separator(*p);
         p++; i++;
     }
 
-    /* Propagate syntax change to the next row if the open commen
-     * state changed. This may recursively affect all the following rows
-     * in the file. */
     int oc = editorRowHasOpenComment(row);
     if (row->hl_oc != oc && row->idx+1 < E.numrows)
         editorUpdateSyntax(&E.row[row->idx+1]);
@@ -497,16 +697,10 @@ void editorUpdateSyntax(erow *row) {
 
 /* Maps syntax highlight token types to terminal colors. */
 int editorSyntaxToColor(int hl) {
-    switch(hl) {
-    case HL_COMMENT:
-    case HL_MLCOMMENT: return 36;     /* cyan */
-    case HL_KEYWORD1: return 33;    /* yellow */
-    case HL_KEYWORD2: return 32;    /* green */
-    case HL_STRING: return 35;      /* magenta */
-    case HL_NUMBER: return 31;      /* red */
-    case HL_MATCH: return 34;      /* blu */
-    default: return 37;             /* white */
+    if (hl >= 0 && hl < 17) {
+        return themes[current_theme].colors[hl];
     }
+    return themes[current_theme].colors[HL_NORMAL];
 }
 
 /* Select the syntax highlight scheme depending on the filename,
@@ -529,6 +723,43 @@ void editorSelectSyntaxHighlight(char *filename) {
     }
 }
 
+/* Enhanced status bar with theme colors */
+void editorDrawStatusBar(struct abuf *ab) {
+    abAppend(ab,"\x1b[0K",4);
+    
+    /* Set status bar background */
+    char status_bg[16];
+    snprintf(status_bg, sizeof(status_bg), "\x1b[48;5;%dm", themes[current_theme].status_bg);
+    abAppend(ab, status_bg, strlen(status_bg));
+    
+    /* Set status bar foreground */
+    char status_fg[16];
+    snprintf(status_fg, sizeof(status_fg), "\x1b[38;5;%dm", themes[current_theme].status_fg);
+    abAppend(ab, status_fg, strlen(status_fg));
+
+    char status[80], rstatus[80];
+    int len = snprintf(status, sizeof(status), " %.20s - %d lines %s | Theme: %s",
+        E.filename ? E.filename : "[No Name]", E.numrows, 
+        E.dirty ? "(modified)" : "", themes[current_theme].name);
+    
+    int rlen = snprintf(rstatus, sizeof(rstatus),
+        "%d/%d ", E.rowoff+E.cy+1, E.numrows);
+    
+    if (len > E.screencols) len = E.screencols;
+    abAppend(ab, status, len);
+    
+    while(len < E.screencols) {
+        if (E.screencols - len == rlen) {
+            abAppend(ab, rstatus, rlen);
+            break;
+        } else {
+            abAppend(ab, " ", 1);
+            len++;
+        }
+    }
+    abAppend(ab, "\x1b[0m\r\n", 6);
+}
+
 /* ======================= Editor rows implementation ======================= */
 
 /* Update the rendered version and the syntax highlight of a row. */
@@ -536,7 +767,7 @@ void editorUpdateRow(erow *row) {
     unsigned int tabs = 0, nonprint = 0;
     int j, idx;
 
-   /* Create a version of the row we can directly print on the screen,
+/* Create a version of the row we can directly print on the screen,
      * respecting tabs, substituting non printable characters with '?'. */
     free(row->render);
     for (j = 0; j < row->size; j++)
@@ -545,7 +776,7 @@ void editorUpdateRow(erow *row) {
     unsigned long long allocsize =
         (unsigned long long) row->size + tabs*8 + nonprint*9 + 1;
     if (allocsize > UINT32_MAX) {
-        printf("Some line of the edited file is too long for kilo\n");
+        printf("Some line of the edited file is too long for xcodex\n");
         exit(1);
     }
 
@@ -873,7 +1104,8 @@ void editorRefreshScreen(void) {
             if (E.numrows == 0 && y == E.screenrows/3) {
                 char welcome[80];
                 int welcomelen = snprintf(welcome,sizeof(welcome),
-                    "XCODEX editor -- verison %s\x1b[0K\r\n", XCODEX_VERSION);
+                    "XCodex editor -- version %s -- Theme: %s\x1b[0K\r\n", 
+                    XCODEX_VERSION, themes[current_theme].name);
                 int padding = (E.screencols-welcomelen)/2;
                 if (padding) {
                     abAppend(&ab,"~",1);
@@ -915,8 +1147,8 @@ void editorRefreshScreen(void) {
                 } else {
                     int color = editorSyntaxToColor(hl[j]);
                     if (color != current_color) {
-                        char buf[16];
-                        int clen = snprintf(buf,sizeof(buf),"\x1b[%dm",color);
+                        char buf[32];
+                        int clen = snprintf(buf,sizeof(buf),"\x1b[38;5;%dm",color);
                         current_color = color;
                         abAppend(&ab,buf,clen);
                     }
@@ -929,26 +1161,8 @@ void editorRefreshScreen(void) {
         abAppend(&ab,"\r\n",2);
     }
 
-    /* Create a two rows status. First row: */
-    abAppend(&ab,"\x1b[0K",4);
-    abAppend(&ab,"\x1b[7m",4);
-    char status[80], rstatus[80];
-    int len = snprintf(status, sizeof(status), "%.20s - %d lines %s",
-        E.filename, E.numrows, E.dirty ? "(modified)" : "");
-    int rlen = snprintf(rstatus, sizeof(rstatus),
-        "%d/%d",E.rowoff+E.cy+1,E.numrows);
-    if (len > E.screencols) len = E.screencols;
-    abAppend(&ab,status,len);
-    while(len < E.screencols) {
-        if (E.screencols - len == rlen) {
-            abAppend(&ab,rstatus,rlen);
-            break;
-        } else {
-            abAppend(&ab," ",1);
-            len++;
-        }
-    }
-    abAppend(&ab,"\x1b[0m\r\n",6);
+    /* Use the new enhanced status bar function */
+    editorDrawStatusBar(&ab);
 
     /* Second row depends on E.statusmsg and the status message update time. */
     abAppend(&ab,"\x1b[0K",4);
@@ -988,10 +1202,10 @@ void editorSetStatusMessage(const char *fmt, ...) {
 
 /* =============================== Find mode ================================ */
 
-#define KILO_QUERY_LEN 256
+#define XCODEX_QUERY_LEN 256
 
 void editorFind(int fd) {
-    char query[KILO_QUERY_LEN+1] = {0};
+    char query[XCODEX_QUERY_LEN+1] = {0};
     int qlen = 0;
     int last_match = -1; /* Last line where a match was found. -1 for none. */
     int find_next = 0; /* if 1 search next, if -1 search prev. */
@@ -1032,7 +1246,7 @@ void editorFind(int fd) {
         } else if (c == ARROW_LEFT || c == ARROW_UP) {
             find_next = -1;
         } else if (isprint(c)) {
-            if (qlen < KILO_QUERY_LEN) {
+            if (qlen < XCODEX_QUERY_LEN) {
                 query[qlen++] = c;
                 query[qlen] = '\0';
                 last_match = -1;
@@ -1163,11 +1377,11 @@ void editorMoveCursor(int key) {
 
 /* Process events arriving from the standard input, which is, the user
  * is typing stuff on the terminal. */
-#define KILO_QUIT_TIMES 3
+#define XCODEX_QUIT_TIMES 3
 void editorProcessKeypress(int fd) {
     /* When the file is modified, requires Ctrl-q to be pressed N times
      * before actually quitting. */
-    static int quit_times = KILO_QUIT_TIMES;
+    static int quit_times = XCODEX_QUIT_TIMES;
 
     int c = editorReadKey(fd);
     switch(c) {
@@ -1193,6 +1407,10 @@ void editorProcessKeypress(int fd) {
         break;
     case CTRL_F:
         editorFind(fd);
+        break;
+    case CTRL_T:        /* Ctrl-t - cycle themes */
+        current_theme = (current_theme + 1) % NUM_THEMES;
+        editorSetStatusMessage("Theme: %s", themes[current_theme].name);
         break;
     case BACKSPACE:     /* Backspace */
     case CTRL_H:        /* Ctrl-h */
@@ -1230,7 +1448,7 @@ void editorProcessKeypress(int fd) {
         break;
     }
 
-    quit_times = KILO_QUIT_TIMES; /* Reset it to the original value. */
+    quit_times = XCODEX_QUIT_TIMES; /* Reset it to the original value. */
 }
 
 int editorFileWasModified(void) {
@@ -1278,7 +1496,7 @@ int xcodex_main(int argc, char **argv) {
     editorOpen(argv[1]);
     if (enableRawMode(STDIN_FILENO) == -1) return 1;
     editorSetStatusMessage(
-        "HELP: Ctrl-S = save | Ctrl-Q = quit | Ctrl-F = find");
+        "HELP: Ctrl-S = save | Ctrl-Q = quit | Ctrl-F = find | Ctrl-T = theme");
     while(1) {
         editorRefreshScreen();
         editorProcessKeypress(STDIN_FILENO);
