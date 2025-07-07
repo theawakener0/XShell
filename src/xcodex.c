@@ -152,6 +152,9 @@ theme_t themes[] = {
 static int current_theme = 0;
 #define NUM_THEMES (sizeof(themes) / sizeof(themes[0]))
 
+/* Forward declarations */
+void editorSetStatusMessage(const char *fmt, ...);
+
 /*Maps syntax highlight token types to themed colors*/
 int editorSyntaxToColor(int hl) {
     if (hl >= 0 && hl < 17) {
@@ -233,7 +236,13 @@ enum KEY_ACTION{
         PAGE_DOWN
 };
 
-void editorSetStatusMessage(const char *fmt, ...);
+/* Forward declarations for append buffer */
+struct abuf {
+    char *b;
+    int len;
+};
+
+void abAppend(struct abuf *ab, const char *s, int len);
 
 /* =========================== Syntax highlights DB =========================
  *
@@ -696,15 +705,6 @@ void editorUpdateSyntax(erow *row) {
 }
 
 /* Maps syntax highlight token types to terminal colors. */
-int editorSyntaxToColor(int hl) {
-    if (hl >= 0 && hl < 17) {
-        return themes[current_theme].colors[hl];
-    }
-    return themes[current_theme].colors[HL_NORMAL];
-}
-
-/* Select the syntax highlight scheme depending on the filename,
- * setting it in the global state E.syntax. */
 void editorSelectSyntaxHighlight(char *filename) {
     for (unsigned int j = 0; j < HLDB_ENTRIES; j++) {
         struct editorSyntax *s = HLDB+j;
