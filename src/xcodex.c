@@ -146,6 +146,84 @@ theme_t themes[] = {
         223, /* cursor_color */
         237, /* status_bg */
         223  /* status_fg */
+    },
+    {
+        "tokyo_night_dark",
+        {
+            169, /* HL_NORMAL - light purple/blue */
+            241, /* HL_NONPRINT - dark grey */
+            102, /* HL_COMMENT - blue grey */
+            102, /* HL_MLCOMMENT - blue grey */
+            175, /* HL_KEYWORD1 - light purple */
+            150, /* HL_KEYWORD2 - light green */
+            110, /* HL_KEYWORD3 - blue */
+            158, /* HL_STRING - light green */
+            215, /* HL_NUMBER - orange */
+            220, /* HL_MATCH - yellow */
+            110, /* HL_FUNCTION - blue */
+            204, /* HL_OPERATOR - red */
+            176, /* HL_PREPROCESSOR - purple */
+            248, /* HL_BRACKET - white */
+            215, /* HL_CONSTANT - orange */
+            176, /* HL_VARIABLE - purple */
+            203  /* HL_ERROR - red */
+        },
+        234, /* bg_color - dark blue */
+        169, /* cursor_color */
+        235, /* status_bg */
+        169  /* status_fg */
+    },
+    {
+        "tokyo_night_light",
+        {
+            52,  /* HL_NORMAL - dark purple */
+            241, /* HL_NONPRINT - grey */
+            102, /* HL_COMMENT - blue grey */
+            102, /* HL_MLCOMMENT - blue grey */
+            90,  /* HL_KEYWORD1 - purple */
+            29,  /* HL_KEYWORD2 - dark green */
+            24,  /* HL_KEYWORD3 - dark blue */
+            28,  /* HL_STRING - dark green */
+            166, /* HL_NUMBER - orange */
+            220, /* HL_MATCH - yellow */
+            24,  /* HL_FUNCTION - dark blue */
+            124, /* HL_OPERATOR - dark red */
+            90,  /* HL_PREPROCESSOR - purple */
+            52,  /* HL_BRACKET - dark purple */
+            166, /* HL_CONSTANT - orange */
+            90,  /* HL_VARIABLE - purple */
+            196  /* HL_ERROR - red */
+        },
+        255, /* bg_color - white */
+        52,  /* cursor_color */
+        252, /* status_bg */
+        52   /* status_fg */
+    },
+    {
+        "tokyo_night_storm",
+        {
+            188, /* HL_NORMAL - light grey */
+            241, /* HL_NONPRINT - dark grey */
+            102, /* HL_COMMENT - blue grey */
+            102, /* HL_MLCOMMENT - blue grey */
+            141, /* HL_KEYWORD1 - light purple */
+            114, /* HL_KEYWORD2 - green */
+            74,  /* HL_KEYWORD3 - blue */
+            143, /* HL_STRING - light green */
+            215, /* HL_NUMBER - orange */
+            220, /* HL_MATCH - yellow */
+            74,  /* HL_FUNCTION - blue */
+            203, /* HL_OPERATOR - red */
+            141, /* HL_PREPROCESSOR - purple */
+            188, /* HL_BRACKET - light grey */
+            215, /* HL_CONSTANT - orange */
+            141, /* HL_VARIABLE - purple */
+            203  /* HL_ERROR - red */
+        },
+        236, /* bg_color - storm dark */
+        188, /* cursor_color */
+        237, /* status_bg */
+        188  /* status_fg */
     }
 };
 
@@ -166,12 +244,52 @@ int editorSyntaxToColor(int hl) {
 /*Theme switching function*/
 void editorSwitchTheme(int theme_index) {
     if (theme_index < 0 || theme_index >= NUM_THEMES) {
-        fprintf(stderr, "Invalid theme index: %d\n", theme_index);
+        editorSetStatusMessage("Invalid theme index: %d (Available: 0-%d)", 
+                            theme_index, NUM_THEMES - 1);
         return;
     }
     current_theme = theme_index;
     /* Update the status message to reflect the new theme */
-    editorSetStatusMessage("Switched to theme: %s", themes[current_theme].name);
+    editorSetStatusMessage("Theme: %s (%d/%d) - Use Ctrl+T to cycle", 
+                        themes[current_theme].name, 
+                        current_theme + 1, 
+                        NUM_THEMES);
+}
+
+/* Enhanced theme cycling with better feedback */
+void editorCycleTheme(void) {
+    current_theme = (current_theme + 1) % NUM_THEMES;
+    editorSetStatusMessage("Theme: %s (%d/%d) - Use Ctrl+T to cycle", 
+                        themes[current_theme].name,
+                        current_theme + 1,
+                        NUM_THEMES);
+}
+
+/* Calculate line number width based on total number of rows - Memory efficient */
+void editorUpdateLineNumberWidth(void) {
+    if (!E.show_line_numbers) {
+        E.line_numbers_width = 0;
+        return;
+    }
+    
+    int max_line = E.numrows > 0 ? E.numrows : 1;
+    E.line_numbers_width = 1;
+    
+    /* Performance optimized: calculate width without string operations */
+    while (max_line >= 10) {
+        E.line_numbers_width++;
+        max_line /= 10;
+    }
+    
+    E.line_numbers_width += 2; /* Add space for padding and separator */
+}
+
+/* Toggle line numbers on/off with theme compatibility */
+void editorToggleLineNumbers(void) {
+    E.show_line_numbers = !E.show_line_numbers;
+    editorUpdateLineNumberWidth();
+    editorSetStatusMessage("Line numbers: %s (Ctrl+N to toggle)", 
+                        E.show_line_numbers ? "ON" : "OFF");
 }
 
 /* This structure represents a single line of the file we are editing. */
@@ -204,6 +322,8 @@ struct editorConfig {
     char statusmsg[80];
     time_t statusmsg_time;
     struct editorSyntax *syntax;    /* Current syntax highlight, or NULL. */
+    int show_line_numbers; /* Show line numbers */
+    int line_numbers_width; /* Width of line numbers */
 };
 
 static struct editorConfig E;
@@ -217,6 +337,7 @@ enum KEY_ACTION{
         TAB = 9,            /* Tab */
         CTRL_L = 12,        /* Ctrl+l */
         ENTER = 13,         /* Enter */
+        CTRL_N = 14,        /* Ctrl-n */
         CTRL_Q = 17,        /* Ctrl-q */
         CTRL_S = 19,        /* Ctrl-s */
         CTRL_T = 20,        /* Ctrl-t */
@@ -272,51 +393,579 @@ char *C_HL_keywords[] = {
     "auto","break","case","continue","default","do","else","enum",
     "extern","for","goto","if","register","return","sizeof","static",
     "struct","switch","typedef","union","volatile","while",
+    /* C99+ Keywords */
     "const","inline","restrict","_Alignas","_Alignof","_Atomic",
     "_Bool","_Complex","_Generic","_Imaginary","_Noreturn","_Static_assert",
     "_Thread_local",
 
     /* C++ Keywords (HL_KEYWORD1) */
     "alignas","alignof","and","and_eq","asm","bitand","bitor","class",
-    "compl","constexpr","const_cast","deltype","delete","dynamic_cast",
-    "explicit","export","false","friend","inline","mutable","namespace",
+    "compl","constexpr","const_cast","decltype","delete","dynamic_cast",
+    "explicit","export","false","friend","mutable","namespace",
     "new","noexcept","not","not_eq","nullptr","operator","or","or_eq",
     "private","protected","public","reinterpret_cast","static_assert",
     "static_cast","template","this","thread_local","throw","true","try",
     "typeid","typename","virtual","xor","xor_eq","catch",
+    /* C++11/14/17/20 Keywords */
     "concept","consteval","constinit","co_await","co_return","co_yield",
-    "decltype","final","import","module","override","requires",
+    "final","import","module","override","requires",
 
-    /* C types (HL_KEYWORD2) */
+    /* C/C++ Types (HL_KEYWORD2) */
     "int|","long|","double|","float|","char|","unsigned|","signed|",
-    "void|","short|","auto|","const|","bool|","size_t|","uint8_t|",
-    "uint16_t|","uint32_t|","uint64_t|","int8_t|","int16_t|","int32_t|","int64_t|",
-    "wchar_t|","char16_t|","char32_t|","ptrdiff_t|","ssize_t|","intptr_t|",
-    "uintptr_t|","FILE|","time_t|","clock_t|","va_list|","jmp_buf|",
-    "sig_atomic_t|","fpos_t|","div_t|","ldiv_t|","intmax_t|","uintmax_t|",
-    "float_t|","double_t|","complex|","_Complex|","_Bool|","_Atomic|",
+    "void|","short|","bool|","size_t|","wchar_t|","ptrdiff_t|",
+    /* Fixed-width integer types */
+    "int8_t|","int16_t|","int32_t|","int64_t|",
+    "uint8_t|","uint16_t|","uint32_t|","uint64_t|",
     "int_least8_t|","int_least16_t|","int_least32_t|","int_least64_t|",
     "uint_least8_t|","uint_least16_t|","uint_least32_t|","uint_least64_t|",
     "int_fast8_t|","int_fast16_t|","int_fast32_t|","int_fast64_t|",
     "uint_fast8_t|","uint_fast16_t|","uint_fast32_t|","uint_fast64_t|",
+    "intmax_t|","uintmax_t|","intptr_t|","uintptr_t|",
+    /* Other C standard types */
+    "FILE|","time_t|","clock_t|","va_list|","jmp_buf|",
+    "sig_atomic_t|","fpos_t|","div_t|","ldiv_t|",
+    "float_t|","double_t|","ssize_t|","max_align_t|",
+    "char16_t|","char32_t|","mbstate_t|","locale_t|",
 
-    /* Built-in functions and constants (HL_KEYWORD3) */
-    "printf||","scanf||","malloc||","free||","sizeof||","strlen||",
-    "strcpy||","strcmp||","NULL||","TRUE||","FALSE||","EOF||",
-    "stdin||","stdout||","stderr||",
-    "calloc||","realloc||","memset||","memcpy||","memmove||",
-    "fopen||","fclose||","fread||","fwrite||","fprintf||","fscanf||",
-    "fgets||","fputs||","fseek||","ftell||","rewind||","fflush||",
-    "isalpha||","isdigit||","isalnum||","isspace||","tolower||","toupper||",
-    "atoi||","atol||","atof||","strtol||","strtod||","strtok||",
-    "strcat||","strstr||","strchr||","strrchr||","strncpy||","strncat||",
-    "strncmp||","strpbrk||","strspn||","strcspn||","strerror||",
-    "abs||","labs||","div||","ldiv||","rand||","srand||","exit||",
-    "qsort||","bsearch||","assert||","setjmp||","longjmp||","signal||",
-    "time||","difftime||","clock||","localtime||","gmtime||","mktime||",
-    "CHAR_BIT||","CHAR_MAX||","CHAR_MIN||","INT_MAX||","INT_MIN||",
-    "LONG_MAX||","LONG_MIN||","LLONG_MAX||","LLONG_MIN||","RAND_MAX||",
-    "BUFSIZ||","FILENAME_MAX||","FOPEN_MAX||","TMP_MAX||","EXIT_SUCCESS||","EXIT_FAILURE||",
+    /* C Standard Library Functions (HL_KEYWORD3) */
+    /* I/O functions */
+    "printf||","scanf||","fprintf||","fscanf||","sprintf||","sscanf||",
+    "fopen||","fclose||","fread||","fwrite||","fseek||","ftell||",
+    "fgets||","fputs||","fflush||","freopen||","remove||","rename||",
+    "fgetc||","fputc||","getc||","putc||","getchar||","putchar||",
+    /* String functions */
+    "strlen||","strcpy||","strncpy||","strcat||","strncat||",
+    "strcmp||","strncmp||","strchr||","strrchr||","strstr||",
+    "strtok||","strpbrk||","strspn||","strcspn||","strerror||",
+    /* Memory management */
+    "malloc||","calloc||","realloc||","free||","memset||","memcpy||","memmove||",
+    /* Character classification */
+    "isalpha||","isdigit||","isalnum||","isspace||","iscntrl||",
+    "isgraph||","islower||","isupper||","isprint||","ispunct||",
+    "tolower||","toupper||",
+    /* Conversion functions */
+    "atoi||","atol||","atof||","strtol||","strtod||","strtoul||",
+    /* Math functions */
+    "abs||","labs||","fabs||","floor||","ceil||","sqrt||","pow||",
+    "sin||","cos||","tan||","asin||","acos||","atan||","exp||","log||",
+    /* Utility functions */
+    "qsort||","bsearch||","div||","ldiv||","rand||","srand||",
+    "time||","difftime||","clock||","mktime||","asctime||","ctime||",
+    "localtime||","gmtime||","strftime||","exit||","abort||",
+    "assert||","setjmp||","longjmp||","signal||",
+    
+    /* Important constants and macros */
+    "NULL||","EOF||","SEEK_SET||","SEEK_CUR||","SEEK_END||",
+    "EXIT_SUCCESS||","EXIT_FAILURE||","RAND_MAX||","INT_MIN||","INT_MAX||",
+    "LONG_MIN||","LONG_MAX||","UINT_MAX||","LLONG_MIN||","LLONG_MAX||",
+    "ULLONG_MAX||","CHAR_MIN||","CHAR_MAX||","CHAR_BIT||","SIZE_MAX||",
+    "stdin||","stdout||","stderr||","true||","false||",
+    
+    /* Common preprocessor directives (highlighted as keywords) */
+    "define","include","ifdef","ifndef","endif","if","elif","else",
+    "error","pragma","undef","line",
+    NULL
+};
+
+/* Python */
+char *Python_HL_extensions[] = {".py",".pyw",".pyi",".py3",NULL};
+char *Python_HL_keywords[] = {
+    /* Python Keywords (HL_KEYWORD1) */
+    "and","as","assert","break","class","continue","def","del","elif",
+    "else","except","finally","for","from","global","if","import",
+    "in","is","lambda","not","or","pass","print","raise","return","try",
+    "while","with","yield","async","await","nonlocal","False","None",
+    "True","match","case","_","type","self","cls",
+    
+    /* Python Built-in Types and Constants (HL_KEYWORD2) */
+    "bool|","int|","float|","complex|","str|","bytes|","bytearray|",
+    "list|","tuple|","dict|","set|","frozenset|","object|","type|",
+    "function|","method|","module|","memoryview|","range|","slice|",
+    "property|","classmethod|","staticmethod|","Ellipsis|","NotImplemented|",
+    "NoneType|","generator|","coroutine|","iterator|","sequence|","mapping|",
+    "__annotations__|","__dict__|","__doc__|","__file__|","__name__|",
+    "__package__|","__spec__|","__loader__|","__path__|","__class__|",
+    
+    /* Python Built-in Functions and Methods (HL_KEYWORD3) */
+    "abs||","all||","any||","ascii||","bin||","bool||","breakpoint||",
+    "bytearray||","bytes||","callable||","chr||","classmethod||","compile||",
+    "complex||","delattr||","dict||","dir||","divmod||","enumerate||","eval||",
+    "exec||","filter||","float||","format||","frozenset||","getattr||",
+    "globals||","hasattr||","hash||","help||","hex||","id||","input||","int||",
+    "isinstance||","issubclass||","iter||","len||","list||","locals||","map||",
+    "max||","memoryview||","min||","next||","object||","oct||","open||","ord||",
+    "pow||","print||","property||","range||","repr||","reversed||","round||",
+    "set||","setattr||","slice||","sorted||","staticmethod||","str||","sum||",
+    "super||","tuple||","type||","vars||","zip||","__import__||",
+    
+    /* Common Python Modules and Their Functions */
+    "os||","sys||","re||","math||","datetime||","json||","random||",
+    "collections||","itertools||","functools||","pathlib||","time||",
+    "os.path||","numpy||","pandas||","matplotlib||","requests||",
+    "unittest||","pytest||","logging||","argparse||","csv||","pickle||",
+    "sqlite3||","socket||","subprocess||","threading||","multiprocessing||",
+    
+    /* Common Methods */
+    "append||","extend||","insert||","remove||","pop||","clear||","index||",
+    "count||","sort||","reverse||","copy||","deepcopy||","keys||","values||",
+    "items||","get||","update||","add||","discard||","join||","split||",
+    "strip||","lstrip||","rstrip||","replace||","format||","startswith||",
+    "endswith||","find||","rfind||","lower||","upper||","title||","read||",
+    "write||","close||","seek||","tell||","readline||","readlines||",
+    
+    /* Common Exception Types */
+    "Exception||","ArithmeticError||","AssertionError||","AttributeError||",
+    "BaseException||","BlockingIOError||","BrokenPipeError||","BufferError||",
+    "ChildProcessError||","ConnectionError||","EOFError||","FileExistsError||",
+    "FileNotFoundError||","FloatingPointError||","ImportError||",
+    "IndentationError||","IndexError||","InterruptedError||","IsADirectoryError||",
+    "KeyError||","KeyboardInterrupt||","LookupError||","MemoryError||",
+    "ModuleNotFoundError||","NameError||","NotADirectoryError||",
+    "NotImplementedError||","OSError||","OverflowError||","PermissionError||",
+    "ProcessLookupError||","RecursionError||","ReferenceError||","RuntimeError||",
+    "StopIteration||","StopAsyncIteration||","SyntaxError||","SystemError||",
+    "SystemExit||","TabError||","TimeoutError||","TypeError||",
+    "UnboundLocalError||","UnicodeError||","UnicodeDecodeError||",
+    "UnicodeEncodeError||","UnicodeTranslateError||","ValueError||",
+    "ZeroDivisionError||",
+    NULL
+};
+
+/* JavaScript */
+char *JS_HL_extensions[] = {".js",".jsx",".mjs",".cjs",NULL};
+char *JS_HL_keywords[] = {
+    /* JavaScript Keywords (HL_KEYWORD1) */
+    "break","case","catch","class","const","continue","debugger","default",
+    "delete","do","else","export","extends","finally","for","function",
+    "if","import","in","instanceof","let","new","return","super","switch",
+    "this","throw","try","typeof","var","void","while","with","yield",
+    "async","await","of","static","get","set","from","as","enum",
+    "implements","interface","package","private","protected","public",
+    "arguments","eval","globalThis",
+    
+    /* JavaScript Built-in Types (HL_KEYWORD2) */
+    "undefined|","null|","boolean|","number|","string|","symbol|","object|","bigint|",
+    "Array|","Object|","Function|","String|","Number|","Boolean|","Date|",
+    "RegExp|","Error|","Promise|","Map|","Set|","WeakMap|","WeakSet|","Symbol|",
+    "Int8Array|","Uint8Array|","Uint8ClampedArray|","Int16Array|","Uint16Array|",
+    "Int32Array|","Uint32Array|","Float32Array|","Float64Array|","BigInt64Array|",
+    "BigUint64Array|","ArrayBuffer|","SharedArrayBuffer|","DataView|","Proxy|",
+    "Reflect|","Intl|","WebAssembly|","Generator|","GeneratorFunction|","AsyncFunction|",
+    "HTMLElement|","Element|","Node|","Document|","Window|","Event|","File|","Blob|",
+    
+    /* JavaScript Built-in Functions and Objects (HL_KEYWORD3) */
+    "console||","console.log||","console.error||","console.warn||","console.info||",
+    "console.debug||","console.table||","console.time||","console.timeEnd||",
+    "parseInt||","parseFloat||","isNaN||","isFinite||","isInteger||",
+    "encodeURI||","decodeURI||","encodeURIComponent||","decodeURIComponent||",
+    "setTimeout||","setInterval||","clearTimeout||","clearInterval||","requestAnimationFrame||",
+    "JSON||","JSON.parse||","JSON.stringify||","Math||","Math.abs||","Math.floor||",
+    "Math.ceil||","Math.round||","Math.max||","Math.min||","Math.random||",
+    "Object.keys||","Object.values||","Object.entries||","Object.assign||","Object.create||",
+    "Array.isArray||","Array.from||","Array.of||","Promise.all||","Promise.race||",
+    "Promise.resolve||","Promise.reject||","Promise.allSettled||","String.fromCharCode||",
+    "document||","window||","location||","history||","localStorage||","sessionStorage||",
+    "navigator||","fetch||","XMLHttpRequest||","WebSocket||","Worker||","FormData||",
+    "URL||","URLSearchParams||","alert||","confirm||","prompt||","performance||",
+    "addEventListener||","removeEventListener||","querySelector||","querySelectorAll||",
+    NULL
+};
+
+/* TypeScript */
+char *TS_HL_extensions[] = {".ts",".tsx",".d.ts",NULL};
+char *TS_HL_keywords[] = {
+    /* TypeScript Keywords (HL_KEYWORD1) */
+    "abstract","any","as","asserts","bigint","boolean","break","case","catch",
+    "class","const","continue","debugger","declare","default","delete","do",
+    "else","enum","export","extends","false","finally","for","from","function",
+    "get","if","implements","import","in","infer","instanceof","interface",
+    "is","keyof","let","module","namespace","never","new","null","number",
+    "object","package","private","protected","public","readonly","require",
+    "return","set","static","string","super","switch","symbol","this","throw",
+    "true","try","type","typeof","undefined","unique","unknown","var","void",
+    "while","with","yield","async","await","of","satisfies","override",
+    "accessor","global","out","using","intrinsic","as const","in keyof",
+
+    /* TypeScript Built-in Types (HL_KEYWORD2) */
+    "string|","number|","boolean|","object|","undefined|","null|","void|",
+    "never|","unknown|","any|","bigint|","symbol|","Array|","Promise|",
+    "Record|","Partial|","Required|","Pick|","Omit|","Exclude|","Extract|",
+    "Readonly|","ReadonlyArray|","NonNullable|","ReturnType|","Parameters|",
+    "InstanceType|","ThisParameterType|","OmitThisParameter|","ThisType|",
+    "Uppercase|","Lowercase|","Capitalize|","Uncapitalize|","Map|","Set|",
+    "WeakMap|","WeakSet|","Date|","RegExp|","Error|","Function|","Tuple|",
+    "Awaited|","ArrayLike|","Iterator|","IterableIterator|","PropertyKey|",
+    "ConstructorParameters|","CallableFunction|","NewableFunction|",
+    "ConcatArray|","ReadonlyMap|","ReadonlySet|","ClassDecorator|",
+    "PropertyDecorator|","MethodDecorator|","ParameterDecorator|",
+    "Iterable|","AsyncIterable|","Generator|","AsyncGenerator|",
+
+    /* TypeScript DOM Types (HL_KEYWORD2) */
+    "HTMLElement|","Node|","Document|","Window|","Event|","EventTarget|",
+    "MouseEvent|","KeyboardEvent|","TouchEvent|","NodeList|","Element|",
+    "CSSStyleDeclaration|","DOMParser|","FileReader|","Blob|","File|",
+    "URL|","URLSearchParams|","Request|","Response|","Headers|",
+    "FormData|","WebSocket|","Worker|","MutationObserver|","IntersectionObserver|",
+    "ResizeObserver|","Performance|","SVGElement|","Canvas|","CanvasRenderingContext2D|",
+
+    /* TypeScript Utility Functions and Objects (HL_KEYWORD3) */
+    "console||","parseInt||","parseFloat||","isNaN||","isFinite||",
+    "JSON||","Math||","Object||","Array||","String||","Number||","Boolean||",
+    "Promise||","Date||","Map||","Set||","WeakMap||","WeakSet||","Proxy||",
+    "Reflect||","Symbol||","RegExp||","Error||","encodeURI||","decodeURI||",
+    "encodeURIComponent||","decodeURIComponent||","setTimeout||","clearTimeout||",
+    "setInterval||","clearInterval||","requestAnimationFrame||","cancelAnimationFrame||",
+    "localStorage||","sessionStorage||","navigator||","location||","history||",
+    "document||","window||","globalThis||","fetch||","XMLHttpRequest||",
+    "alert||","confirm||","prompt||","Error||","SyntaxError||","TypeError||",
+    "RangeError||","ReferenceError||","EvalError||","URIError||","AggregateError||",
+    "Intl||","structuredClone||","crypto||","performance||","console.log||",
+    "console.error||","console.warn||","console.info||","console.debug||",
+    "console.table||","console.time||","console.timeEnd||","console.trace||",
+    "Array.isArray||","Object.keys||","Object.values||","Object.entries||",
+    "Object.assign||","Object.create||","Object.defineProperty||",
+    "Promise.all||","Promise.race||","Promise.resolve||","Promise.reject||",
+    "Promise.allSettled||","Promise.any||",
+    NULL
+};
+
+/* HTML */
+char *HTML_HL_extensions[] = {".html",".htm",".xhtml",".shtml",NULL};
+char *HTML_HL_keywords[] = {
+    /* HTML Structure Tags (HL_KEYWORD1) */
+    "html","head","body","title","meta","link","script","style","template",
+    "slot","shadow","base","noscript","iframe","object","embed","param",
+    
+    /* HTML Content Sectioning (HL_KEYWORD1) */
+    "div","span","h1","h2","h3","h4","h5","h6","p","br","hr","header",
+    "footer","section","article","aside","main","nav","dialog","details",
+    "summary","figure","figcaption","address","blockquote","pre","code",
+    
+    /* HTML Lists and Tables (HL_KEYWORD1) */
+    "ul","ol","li","dl","dt","dd","table","tr","td","th","thead","tbody",
+    "tfoot","caption","col","colgroup",
+    
+    /* HTML Form Elements (HL_KEYWORD1) */
+    "form","input","button","select","option","optgroup","textarea","label",
+    "fieldset","legend","datalist","output","progress","meter","keygen",
+    
+    /* HTML Media Elements (HL_KEYWORD1) */
+    "a","img","audio","video","source","track","canvas","svg","picture",
+    "map","area","portal",
+    
+    /* HTML Common Attributes (HL_KEYWORD2) */
+    "id|","class|","style|","src|","href|","alt|","title|","width|","height|",
+    "lang|","dir|","hidden|","tabindex|","accesskey|","draggable|","translate|",
+    "contenteditable|","spellcheck|","autocapitalize|","enterkeyhint|","inputmode|",
+    
+    /* HTML Form Attributes (HL_KEYWORD2) */
+    "type|","value|","name|","placeholder|","required|","disabled|",
+    "readonly|","checked|","selected|","multiple|","autofocus|","pattern|",
+    "min|","max|","step|","maxlength|","minlength|","size|","autocomplete|",
+    "action|","method|","enctype|","novalidate|","for|","form|","formaction|",
+    "formmethod|","formenctype|","formnovalidate|","formtarget|",
+    
+    /* HTML Link & Resource Attributes (HL_KEYWORD2) */
+    "target|","rel|","download|","media|","crossorigin|","integrity|",
+    "referrerpolicy|","loading|","decoding|","importance|","fetchpriority|",
+    
+    /* HTML Metadata Attributes (HL_KEYWORD2) */
+    "charset|","content|","http-equiv|","property|","itemprop|","itemscope|",
+    "itemtype|","itemid|","async|","defer|","nonce|","data-*|",
+    
+    /* WAI-ARIA Accessibility Attributes (HL_KEYWORD2) */
+    "role|","aria-label|","aria-labelledby|","aria-describedby|","aria-hidden|",
+    "aria-expanded|","aria-controls|","aria-live|","aria-atomic|","aria-relevant|",
+    "aria-disabled|","aria-haspopup|","aria-pressed|","aria-checked|","aria-selected|",
+    "aria-current|","aria-invalid|","aria-required|","aria-orientation|","aria-level|",
+    
+    /* HTML5 Semantic & Special Elements (HL_KEYWORD3) */
+    "article||","section||","nav||","aside||","header||","footer||","main||",
+    "mark||","time||","ruby||","rt||","rp||","bdi||","wbr||","data||",
+    "abbr||","cite||","dfn||","em||","strong||","small||","sub||","sup||",
+    "samp||","kbd||","var||","q||","u||","b||","i||","s||","del||","ins||",
+    "dialog||","slot||","template||","picture||","portal||","search||",
+    
+    /* HTML5 Interactive & Media Elements (HL_KEYWORD3) */
+    "audio||","video||","canvas||","svg||","math||","progress||","meter||",
+    "details||","summary||","dialog||","datalist||","output||","track||",
+    
+    /* HTML Global Event Attributes (HL_KEYWORD3) */
+    "onclick||","onchange||","onsubmit||","onload||","oninput||","onfocus||",
+    "onblur||","onkeydown||","onkeyup||","onmouseover||","onmouseout||",
+    "ondragstart||","ondrop||","onscroll||","ontouchstart||","ontouchend||",
+    NULL
+};
+
+/* CSS */
+char *CSS_HL_extensions[] = {".css",".scss",".sass",".less",NULL};
+char *CSS_HL_keywords[] = {
+    /* CSS Layout Properties (HL_KEYWORD1) */
+    "display","position","top","right","bottom","left","z-index","float","clear",
+    "width","height","max-width","max-height","min-width","min-height",
+    "overflow","overflow-x","overflow-y","resize","clip","visibility",
+    "margin","margin-top","margin-right","margin-bottom","margin-left",
+    "padding","padding-top","padding-right","padding-bottom","padding-left",
+    "box-sizing","object-fit","object-position","aspect-ratio",
+    
+    /* CSS Flexbox Properties */
+    "flex","flex-direction","flex-wrap","flex-flow","flex-grow","flex-shrink",
+    "flex-basis","justify-content","align-items","align-self","align-content",
+    "gap","row-gap","column-gap","order",
+    
+    /* CSS Grid Properties */
+    "grid","grid-template","grid-template-rows","grid-template-columns","grid-template-areas",
+    "grid-auto-rows","grid-auto-columns","grid-auto-flow","grid-row","grid-column",
+    "grid-area","grid-row-start","grid-row-end","grid-column-start","grid-column-end",
+    
+    /* CSS Background & Border Properties */
+    "color","background","background-color","background-image","background-repeat",
+    "background-attachment","background-position","background-size","background-origin",
+    "background-clip","background-blend-mode","border","border-width","border-style",
+    "border-color","border-top","border-right","border-bottom","border-left",
+    "border-radius","border-top-left-radius","border-top-right-radius",
+    "border-bottom-right-radius","border-bottom-left-radius","border-image",
+    "border-collapse","outline","outline-width","outline-style","outline-color",
+    "outline-offset","box-shadow","mask","mask-image","mask-position",
+    
+    /* CSS Typography Properties */
+    "font","font-family","font-size","font-weight","font-style","font-variant",
+    "font-stretch","line-height","letter-spacing","word-spacing","text-align",
+    "text-decoration","text-decoration-line","text-decoration-style","text-decoration-color",
+    "text-transform","text-indent","text-overflow","text-shadow","white-space",
+    "vertical-align","word-break","word-wrap","overflow-wrap","hyphens",
+    "direction","unicode-bidi","writing-mode","text-orientation","quotes",
+    
+    /* CSS Transform & Animation Properties */
+    "transform","transform-origin","transform-style","backface-visibility",
+    "perspective","perspective-origin","transition","transition-property",
+    "transition-duration","transition-timing-function","transition-delay",
+    "animation","animation-name","animation-duration","animation-timing-function",
+    "animation-delay","animation-iteration-count","animation-direction",
+    "animation-fill-mode","animation-play-state",
+    
+    /* CSS Other Properties */
+    "opacity","filter","backdrop-filter","cursor","pointer-events","user-select",
+    "list-style","list-style-type","list-style-position","list-style-image",
+    "table-layout","caption-side","empty-cells","content","counter-reset",
+    "counter-increment","will-change","scroll-behavior","overscroll-behavior",
+    "contain","isolation","mix-blend-mode","appearance","touch-action",
+    "color-scheme","accent-color","caret-color","scrollbar-color","scrollbar-width",
+    "place-items","place-content","place-self","all","container","container-type",
+    
+    /* CSS Values (HL_KEYWORD2) */
+    "auto|","none|","inherit|","initial|","unset|","revert|","revert-layer|",
+    "block|","inline|","inline-block|","flex|","grid|","contents|","flow-root|",
+    "absolute|","relative|","fixed|","static|","sticky|","hidden|","visible|",
+    "scroll|","auto|","clip|","ellipsis|","nowrap|","break-word|","normal|",
+    "bold|","bolder|","lighter|","italic|","oblique|","underline|","overline|",
+    "line-through|","solid|","dashed|","dotted|","double|","groove|","ridge|",
+    "inset|","outset|","center|","left|","right|","justify|","top|","bottom|",
+    "middle|","transparent|","currentcolor|","repeat|","no-repeat|","repeat-x|","repeat-y|",
+    "cover|","contain|","pointer|","default|","move|","grab|","zoom-in|","zoom-out|",
+    "row|","column|","row-reverse|","column-reverse|","wrap|","nowrap|","wrap-reverse|",
+    "start|","end|","flex-start|","flex-end|","space-between|","space-around|","space-evenly|",
+    "stretch|","baseline|","first|","last|","ease|","ease-in|","ease-out|","ease-in-out|",
+    "linear|","step-start|","step-end|","forwards|","backwards|","both|","infinite|",
+    "paused|","running|","alternate|","alternate-reverse|","normal|","reverse|",
+    "uppercase|","lowercase|","capitalize|","small-caps|","subgrid|","masonry|",
+    
+    /* CSS Color Values */
+    "black|","white|","red|","green|","blue|","yellow|","magenta|","cyan|",
+    "gray|","grey|","silver|","maroon|","olive|","navy|","purple|","teal|",
+    "aqua|","fuchsia|","lime|","orange|","brown|","pink|","violet|","indigo|",
+    
+    /* CSS Units */
+    "px|","em|","rem|","vh|","vw|","vmin|","vmax|","dvh|","svh|","lvh|",
+    "ex|","ch|","%|","pt|","pc|","in|","cm|","mm|","fr|","s|","ms|","deg|",
+    "rad|","grad|","turn|","dpi|","dpcm|","dppx|",
+    
+    /* CSS Functions (HL_KEYWORD3) */
+    "rgb||","rgba||","hsl||","hsla||","hwb||","lab||","lch||","color||",
+    "url||","attr||","calc||","clamp||","min||","max||","var||","env||",
+    "linear-gradient||","radial-gradient||","conic-gradient||","repeating-linear-gradient||",
+    "repeating-radial-gradient||","repeating-conic-gradient||","image-set||",
+    "translate||","translateX||","translateY||","translateZ||","translate3d||",
+    "scale||","scaleX||","scaleY||","scaleZ||","scale3d||",
+    "rotate||","rotateX||","rotateY||","rotateZ||","rotate3d||",
+    "skew||","skewX||","skewY||","matrix||","matrix3d||","perspective||",
+    "blur||","brightness||","contrast||","drop-shadow||","grayscale||",
+    "hue-rotate||","invert||","opacity||","saturate||","sepia||",
+    "cubic-bezier||","steps||","counter||","counters||","element||",
+    "not||","is||","where||","has||","nth-child||","nth-of-type||",
+    "cross-fade||","fit-content||","minmax||","repeat||","symbols||",
+    "supports||","theme||","format||","local||","from||","to||",
+    NULL
+};
+
+/* Lua */
+char *Lua_HL_extensions[] = {".lua",NULL};
+char *Lua_HL_keywords[] = {
+    /* Lua Keywords (HL_KEYWORD1) */
+    "and","break","do","else","elseif","end","false","for","function",
+    "goto","if","in","local","nil","not","or","repeat","return","then",
+    "true","until","while","_ENV","_G",
+    
+    /* Lua Built-in Types and Values (HL_KEYWORD2) */
+    "nil|","boolean|","number|","string|","function|","userdata|","thread|","table|",
+    "integer|","float|","true|","false|","..."|,"self|","_VERSION|",
+    
+    /* Lua Built-in Functions and Libraries (HL_KEYWORD3) */
+    /* Global functions */
+    "assert||","collectgarbage||","dofile||","error||","getmetatable||",
+    "ipairs||","load||","loadfile||","next||","pairs||","pcall||","print||",
+    "rawequal||","rawget||","rawlen||","rawset||","require||","select||",
+    "setmetatable||","tonumber||","tostring||","type||","xpcall||",
+    /* Standard libraries */
+    "coroutine||","debug||","io||","math||","os||","package||","string||","table||","utf8||",
+    /* String methods */
+    "string.byte||","string.char||","string.dump||","string.find||","string.format||",
+    "string.gmatch||","string.gsub||","string.len||","string.lower||","string.match||",
+    "string.rep||","string.reverse||","string.sub||","string.upper||",
+    /* Table methods */
+    "table.concat||","table.insert||","table.move||","table.pack||","table.remove||",
+    "table.sort||","table.unpack||",
+    /* Math functions */
+    "math.abs||","math.acos||","math.asin||","math.atan||","math.ceil||",
+    "math.cos||","math.deg||","math.exp||","math.floor||","math.fmod||",
+    "math.huge||","math.log||","math.max||","math.min||","math.modf||",
+    "math.pi||","math.rad||","math.random||","math.randomseed||","math.sin||",
+    "math.sqrt||","math.tan||",
+    /* IO functions */
+    "io.close||","io.flush||","io.input||","io.lines||","io.open||",
+    "io.output||","io.popen||","io.read||","io.tmpfile||","io.type||","io.write||",
+    /* OS functions */
+    "os.clock||","os.date||","os.difftime||","os.execute||","os.exit||",
+    "os.getenv||","os.remove||","os.rename||","os.setlocale||","os.time||",
+    /* Coroutine functions */
+    "coroutine.create||","coroutine.isyieldable||","coroutine.resume||",
+    "coroutine.running||","coroutine.status||","coroutine.wrap||","coroutine.yield||",
+    NULL
+};
+
+/* Go */
+char *Go_HL_extensions[] = {".go",NULL};
+char *Go_HL_keywords[] = {
+    /* Go Keywords (HL_KEYWORD1) */
+    "break","case","chan","const","continue","default","defer","else",
+    "fallthrough","for","func","go","goto","if","import","interface",
+    "map","package","range","return","select","struct","switch","type","var",
+    "iota","nil","true","false","_",
+
+    /* Go Built-in Types (HL_KEYWORD2) */
+    "bool|","byte|","complex64|","complex128|","error|","float32|","float64|",
+    "int|","int8|","int16|","int32|","int64|","rune|","string|","uint|",
+    "uint8|","uint16|","uint32|","uint64|","uintptr|","any|","comparable|",
+    "Context|","Reader|","Writer|","ReadWriter|","ReadCloser|","WriteCloser|",
+    "ReadWriteCloser|","Error|","Handler|","ResponseWriter|","Request|",
+    "Time|","Duration|","WaitGroup|","Mutex|","RWMutex|","Cond|","Once|",
+    
+    /* Go Built-in Functions and Common Methods (HL_KEYWORD3) */
+    /* Built-in functions */
+    "append||","cap||","close||","complex||","copy||","delete||","imag||",
+    "len||","make||","new||","panic||","print||","println||","real||","recover||",
+    /* Common standard library packages */
+    "fmt||","log||","os||","io||","time||","context||","sync||","net||","http||",
+    "strings||","bytes||","strconv||","math||","sort||","encoding||","json||",
+    "xml||","crypto||","database||","sql||","regexp||","reflect||","path||",
+    "filepath||","bufio||","flag||","errors||","testing||",
+    /* Common methods */
+    "Printf||","Sprintf||","Fprintf||","Println||","Sprint||","Fprintln||",
+    "Error||","String||","MarshalJSON||","UnmarshalJSON||","Scan||","Exec||",
+    "Query||","QueryRow||","Open||","Close||","Read||","Write||","ReadFrom||",
+    "WriteTo||","Marshal||","Unmarshal||","New||","Add||","Done||","Wait||",
+    "Lock||","Unlock||","RLock||","RUnlock||","Listen||","ListenAndServe||",
+    "Handle||","HandleFunc||","Get||","Post||","Set||","Do||","Parse||",
+    "Execute||","Sleep||","Now||","Since||","Until||","Format||","Join||",
+    "Split||","Replace||","Contains||","HasPrefix||","HasSuffix||","TrimSpace||",
+    "NewReader||","NewWriter||","NewDecoder||","NewEncoder||","Fatal||",
+    "Fatalf||","Copy||","CopyN||","Create||","Remove||","Mkdir||","MkdirAll||",
+    NULL
+};
+
+/* Rust */
+char *Rust_HL_extensions[] = {".rs",NULL};
+char *Rust_HL_keywords[] = {
+    /* Rust Keywords (HL_KEYWORD1) */
+    "as","async","await","break","const","continue","crate","dyn","else",
+    "enum","extern","false","fn","for","if","impl","in","let","loop",
+    "match","mod","move","mut","pub","ref","return","self","Self","static",
+    "struct","super","trait","true","type","unsafe","use","where","while",
+    "abstract","become","box","do","final","macro","override","priv","typeof",
+    "unsized","virtual","yield","try","union","catch","default","macro_rules",
+    
+    /* Rust Built-in Types (HL_KEYWORD2) */
+    "bool|","char|","str|","i8|","i16|","i32|","i64|","i128|","isize|",
+    "u8|","u16|","u32|","u64|","u128|","usize|","f32|","f64|","String|",
+    "Vec|","Option|","Result|","Box|","Rc|","Arc|","RefCell|","Mutex|",
+    "HashMap|","HashSet|","BTreeMap|","BTreeSet|","VecDeque|","LinkedList|",
+    "BinaryHeap|","Cell|","RwLock|","Cow|","Path|","PathBuf|","OsString|",
+    "Ordering|","Range|","RangeInclusive|","RangeTo|","RangeFrom|","Duration|",
+    "Instant|","SystemTime|","PhantomData|","Pin|","Future|","Stream|","Iterator|",
+    "Send|","Sync|","Copy|","Clone|","Debug|","Display|","Error|","From|","Into|",
+    
+    /* Rust Built-in Functions and Macros (HL_KEYWORD3) */
+    "println||","print||","panic||","assert||","assert_eq||","assert_ne||",
+    "debug_assert||","unreachable||","unimplemented||","todo||","compile_error||",
+    "format||","vec||","Some||","None||","Ok||","Err||","Default||","Clone||",
+    "include||","include_str||","include_bytes||","concat||","env||","option_env||",
+    "file||","line||","column||","module_path||","cfg||","stringify||","dbg||",
+    "eprint||","eprintln||","write||","writeln||","format_args||","from_iter||",
+    "iter||","into_iter||","collect||","map||","filter||","fold||","reduce||",
+    "find||","any||","all||","count||","enumerate||","zip||","rev||","sorted||",
+    "to_string||","to_owned||","as_ref||","as_mut||","unwrap||","expect||",
+    "unwrap_or||","unwrap_or_else||","unwrap_or_default||","is_some||","is_none||",
+    "is_ok||","is_err||","and_then||","or_else||","map_err||","new||","default||",
+    "len||","is_empty||","contains||","insert||","remove||","get||","set||",
+    NULL
+};
+
+/* Java */
+char *Java_HL_extensions[] = {".java",NULL};
+char *Java_HL_keywords[] = {
+    /* Java Keywords (HL_KEYWORD1) */
+    "abstract","assert","boolean","break","byte","case","catch","char","class",
+    "const","continue","default","do","double","else","enum","extends","final",
+    "finally","float","for","goto","if","implements","import","instanceof",
+    "int","interface","long","native","new","package","private","protected",
+    "public","return","short","static","strictfp","super","switch","synchronized",
+    "this","throw","throws","transient","try","void","volatile","while",
+    /* Java 8+ Keywords */
+    "var","module","requires","exports","opens","uses","provides","with","to",
+    "yield","sealed","permits","record","non-sealed",
+    
+    /* Java Built-in Types (HL_KEYWORD2) */
+    "boolean|","byte|","char|","double|","float|","int|","long|","short|",
+    "String|","Object|","Class|","Integer|","Double|","Float|","Boolean|",
+    "Character|","Byte|","Short|","Long|","BigInteger|","BigDecimal|",
+    /* Collections */
+    "ArrayList|","HashMap|","HashSet|","LinkedList|","TreeMap|","TreeSet|",
+    "Queue|","Deque|","LinkedHashMap|","LinkedHashSet|","ConcurrentHashMap|",
+    "PriorityQueue|","Vector|","Stack|","CopyOnWriteArrayList|",
+    /* Functional Interfaces */
+    "Function|","Consumer|","Supplier|","Predicate|","BiFunction|","BiConsumer|",
+    "BiPredicate|","UnaryOperator|","BinaryOperator|","Runnable|","Callable|",
+    /* Utility Types */
+    "Optional|","Stream|","Collector|","Collectors|","Arrays|","Collections|",
+    "Comparator|","Iterable|","Iterator|","Enum|","Thread|","ThreadLocal|",
+    "Future|","CompletableFuture|","Path|","Files|","Instant|","Duration|",
+    "LocalDate|","LocalTime|","LocalDateTime|","ZonedDateTime|","Period|",
+    
+    /* Java Built-in Functions (HL_KEYWORD3) */
+    "System||","out||","in||","err||","println||","print||","printf||",
+    "format||","valueOf||","toString||","equals||","hashCode||","compareTo||",
+    "length||","size||","get||","set||","put||","remove||","add||","contains||",
+    "stream||","forEach||","map||","filter||","reduce||","collect||","sorted||",
+    "of||","join||","split||","replace||","substring||","parseInt||","parseDouble||",
+    /* Common Classes */
+    "String||","Integer||","Double||","Float||","Boolean||","Character||",
+    "Math||","Scanner||","Arrays||","Collections||","List||","Map||","Set||",
+    "Optional||","Stream||","Files||","Paths||","Pattern||","Matcher||",
+    /* Exceptions */
+    "Exception||","RuntimeException||","IOException||","SQLException||",
+    "NullPointerException||","IllegalArgumentException||","ClassNotFoundException||",
+    "IndexOutOfBoundsException||","NumberFormatException||","ArithmeticException||",
+    "UnsupportedOperationException||","ConcurrentModificationException||",
     NULL
 };
 
@@ -327,6 +976,69 @@ struct editorSyntax HLDB[] = {
         /* C / C++ */
         C_HL_extensions,
         C_HL_keywords,
+        "//","/*","*/",
+        HL_HIGHLIGHT_STRINGS | HL_HIGHLIGHT_NUMBERS
+    },
+    {
+        /* Python */
+        Python_HL_extensions,
+        Python_HL_keywords,
+        "#","","",
+        HL_HIGHLIGHT_STRINGS | HL_HIGHLIGHT_NUMBERS
+    },
+    {
+        /* JavaScript */
+        JS_HL_extensions,
+        JS_HL_keywords,
+        "//","/*","*/",
+        HL_HIGHLIGHT_STRINGS | HL_HIGHLIGHT_NUMBERS
+    },
+    {
+        /* TypeScript */
+        TS_HL_extensions,
+        TS_HL_keywords,
+        "//","/*","*/",
+        HL_HIGHLIGHT_STRINGS | HL_HIGHLIGHT_NUMBERS
+    },
+    {
+        /* HTML */
+        HTML_HL_extensions,
+        HTML_HL_keywords,
+        "","<!--","-->",
+        HL_HIGHLIGHT_STRINGS
+    },
+    {
+        /* CSS */
+        CSS_HL_extensions,
+        CSS_HL_keywords,
+        "","/*","*/",
+        HL_HIGHLIGHT_STRINGS | HL_HIGHLIGHT_NUMBERS
+    },
+    {
+        /* Lua */
+        Lua_HL_extensions,
+        Lua_HL_keywords,
+        "--","--[[","]]",
+        HL_HIGHLIGHT_STRINGS | HL_HIGHLIGHT_NUMBERS
+    },
+    {
+        /* Go */
+        Go_HL_extensions,
+        Go_HL_keywords,
+        "//","/*","*/",
+        HL_HIGHLIGHT_STRINGS | HL_HIGHLIGHT_NUMBERS
+    },
+    {
+        /* Rust */
+        Rust_HL_extensions,
+        Rust_HL_keywords,
+        "//","/*","*/",
+        HL_HIGHLIGHT_STRINGS | HL_HIGHLIGHT_NUMBERS
+    },
+    {
+        /* Java */
+        Java_HL_extensions,
+        Java_HL_keywords,
         "//","/*","*/",
         HL_HIGHLIGHT_STRINGS | HL_HIGHLIGHT_NUMBERS
     }
@@ -738,9 +1450,10 @@ void editorDrawStatusBar(struct abuf *ab) {
     abAppend(ab, status_fg, strlen(status_fg));
 
     char status[80], rstatus[80];
-    int len = snprintf(status, sizeof(status), " %.20s - %d lines %s | Theme: %s",
+    int len = snprintf(status, sizeof(status), " %.15s - %d lines %s | Theme: %s | Line#: %s",
         E.filename ? E.filename : "[No Name]", E.numrows, 
-        E.dirty ? "(modified)" : "", themes[current_theme].name);
+        E.dirty ? "(modified)" : "", themes[current_theme].name,
+        E.show_line_numbers ? "ON" : "OFF");
     
     int rlen = snprintf(rstatus, sizeof(rstatus),
         "%d/%d ", E.rowoff+E.cy+1, E.numrows);
@@ -816,6 +1529,7 @@ void editorInsertRow(int at, char *s, size_t len) {
     E.row[at].idx = at;
     editorUpdateRow(E.row+at);
     E.numrows++;
+    editorUpdateLineNumberWidth(); /* Update line number width */
     E.dirty++;
 }
 
@@ -837,6 +1551,7 @@ void editorDelRow(int at) {
     memmove(E.row+at,E.row+at+1,sizeof(E.row[0])*(E.numrows-at-1));
     for (int j = at; j < E.numrows-1; j++) E.row[j].idx++;
     E.numrows--;
+    editorUpdateLineNumberWidth(); /* Update line number width */
     E.dirty++;
 }
 
@@ -914,6 +1629,7 @@ void editorInsertChar(int c) {
     int filerow = E.rowoff+E.cy;
     int filecol = E.coloff+E.cx;
     erow *row = (filerow >= E.numrows) ? NULL : &E.row[filerow];
+    int effective_screencols = E.screencols - E.line_numbers_width;
 
     /* If the row where the cursor is currently located does not exist in our
      * logical representaion of the file, add enough empty rows as needed. */
@@ -923,7 +1639,7 @@ void editorInsertChar(int c) {
     }
     row = &E.row[filerow];
     editorRowInsertChar(row,filecol,c);
-    if (E.cx == E.screencols-1)
+    if (E.cx == effective_screencols-1)
         E.coloff++;
     else
         E.cx++;
@@ -1092,12 +1808,25 @@ void editorRefreshScreen(void) {
         int filerow = E.rowoff+y;
 
         if (filerow >= E.numrows) {
+            /* Draw line numbers for empty lines */
+            if (E.show_line_numbers) {
+                char line_num[16];
+                int line_num_len = snprintf(line_num, sizeof(line_num), 
+                    "%*s ", E.line_numbers_width - 1, "");
+                
+                /* Set line number color (grey) */
+                abAppend(&ab, "\x1b[38;5;240m", 10);
+                abAppend(&ab, line_num, line_num_len);
+                abAppend(&ab, "\x1b[39m", 5); /* Reset color */
+            }
+            
             if (E.numrows == 0 && y == E.screenrows/3) {
                 char welcome[80];
                 int welcomelen = snprintf(welcome,sizeof(welcome),
                     "XCodex editor -- version %s -- Theme: %s\x1b[0K\r\n", 
                     XCODEX_VERSION, themes[current_theme].name);
-                int padding = (E.screencols-welcomelen)/2;
+                int effective_cols = E.screencols - E.line_numbers_width;
+                int padding = (effective_cols - welcomelen)/2;
                 if (padding) {
                     abAppend(&ab,"~",1);
                     padding--;
@@ -1112,10 +1841,30 @@ void editorRefreshScreen(void) {
 
         r = &E.row[filerow];
 
+        /* Draw line numbers */
+        if (E.show_line_numbers) {
+            char line_num[16];
+            int current_line = filerow + 1;
+            int line_num_len = snprintf(line_num, sizeof(line_num), 
+                "%*d ", E.line_numbers_width - 1, current_line);
+            
+            /* Highlight current line number with theme colors */
+            if (filerow == E.rowoff + E.cy) {
+                abAppend(&ab, "\x1b[38;5;220m", 10); /* Yellow for current line */
+                abAppend(&ab, "\x1b[1m", 4); /* Bold */
+            } else {
+                abAppend(&ab, "\x1b[38;5;240m", 10); /* Grey for other lines */
+            }
+            
+            abAppend(&ab, line_num, line_num_len);
+            abAppend(&ab, "\x1b[0m", 4); /* Reset formatting */
+        }
+
         int len = r->rsize - E.coloff;
+        int effective_screencols = E.screencols - E.line_numbers_width;
         int current_color = -1;
         if (len > 0) {
-            if (len > E.screencols) len = E.screencols;
+            if (len > effective_screencols) len = effective_screencols;
             char *c = r->render+E.coloff;
             unsigned char *hl = r->hl+E.coloff;
             int j;
@@ -1165,7 +1914,7 @@ void editorRefreshScreen(void) {
      * at which the cursor is displayed may be different compared to 'E.cx'
      * because of TABs. */
     int j;
-    int cx = 1;
+    int cx = 1 + E.line_numbers_width; /* Account for line numbers */
     int filerow = E.rowoff+E.cy;
     erow *row = (filerow >= E.numrows) ? NULL : &E.row[filerow];
     if (row) {
@@ -1298,6 +2047,7 @@ void editorMoveCursor(int key) {
     int filecol = E.coloff+E.cx;
     int rowlen;
     erow *row = (filerow >= E.numrows) ? NULL : &E.row[filerow];
+    int effective_screencols = E.screencols - E.line_numbers_width;
 
     switch(key) {
     case ARROW_LEFT:
@@ -1308,9 +2058,9 @@ void editorMoveCursor(int key) {
                 if (filerow > 0) {
                     E.cy--;
                     E.cx = E.row[filerow-1].size;
-                    if (E.cx > E.screencols-1) {
-                        E.coloff = E.cx-E.screencols+1;
-                        E.cx = E.screencols-1;
+                    if (E.cx > effective_screencols-1) {
+                        E.coloff = E.cx-effective_screencols+1;
+                        E.cx = effective_screencols-1;
                     }
                 }
             }
@@ -1320,7 +2070,7 @@ void editorMoveCursor(int key) {
         break;
     case ARROW_RIGHT:
         if (row && filecol < row->size) {
-            if (E.cx == E.screencols-1) {
+            if (E.cx == effective_screencols-1) {
                 E.coloff++;
             } else {
                 E.cx += 1;
@@ -1403,6 +2153,9 @@ void editorProcessKeypress(int fd) {
         current_theme = (current_theme + 1) % NUM_THEMES;
         editorSetStatusMessage("Theme: %s", themes[current_theme].name);
         break;
+    case CTRL_N:        /* Ctrl-n - toggle line numbers */
+        editorToggleLineNumbers();
+        break;
     case BACKSPACE:     /* Backspace */
     case CTRL_H:        /* Ctrl-h */
     case DEL_KEY:
@@ -1458,7 +2211,8 @@ void updateWindowSize(void) {
 void handleSigWinCh(int unused __attribute__((unused))) {
     updateWindowSize();
     if (E.cy > E.screenrows) E.cy = E.screenrows - 1;
-    if (E.cx > E.screencols) E.cx = E.screencols - 1;
+    int effective_screencols = E.screencols - E.line_numbers_width;
+    if (E.cx > effective_screencols) E.cx = effective_screencols - 1;
     editorRefreshScreen();
 }
 
@@ -1472,7 +2226,10 @@ void initEditor(void) {
     E.dirty = 0;
     E.filename = NULL;
     E.syntax = NULL;
+    E.show_line_numbers = 1;        /* Line numbers ON by default */
+    E.line_numbers_width = 0;
     updateWindowSize();
+    editorUpdateLineNumberWidth();  /* Initialize line number width */
     signal(SIGWINCH, handleSigWinCh);
 }
 
@@ -1487,7 +2244,7 @@ int xcodex_main(int argc, char **argv) {
     editorOpen(argv[1]);
     if (enableRawMode(STDIN_FILENO) == -1) return 1;
     editorSetStatusMessage(
-        "HELP: Ctrl-S = save | Ctrl-Q = quit | Ctrl-F = find | Ctrl-T = theme");
+        "HELP: Ctrl-S = save | Ctrl-Q = quit | Ctrl-F = find | Ctrl-T = theme | Ctrl-N = line numbers");
     while(1) {
         editorRefreshScreen();
         editorProcessKeypress(STDIN_FILENO);
