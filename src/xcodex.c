@@ -294,8 +294,10 @@ void editorSwitchTheme(int theme_index) {
     }
     current_theme = theme_index;
     
-    /* Apply background color */
-    editorSetBackgroundColor(themes[current_theme].bg_color);
+    /* Apply background color with bounds checking */
+    if (current_theme >= 0 && current_theme < NUM_THEMES) {
+        editorSetBackgroundColor(themes[current_theme].bg_color);
+    }
     
     /* Update the status message to reflect the new theme */
     editorSetStatusMessage("Theme: %s (%d/%d) - Use Ctrl+T to cycle", 
@@ -308,8 +310,10 @@ void editorSwitchTheme(int theme_index) {
 void editorCycleTheme(void) {
     current_theme = (current_theme + 1) % NUM_THEMES;
     
-    /* Apply background color */
-    editorSetBackgroundColor(themes[current_theme].bg_color);
+    /* Apply background color with bounds checking */
+    if (current_theme >= 0 && current_theme < NUM_THEMES) {
+        editorSetBackgroundColor(themes[current_theme].bg_color);
+    }
     
     editorSetStatusMessage("Theme: %s (%d/%d) - Use Ctrl+T to cycle", 
                         themes[current_theme].name,
@@ -1455,14 +1459,22 @@ void editorSelectSyntaxHighlight(char *filename) {
 
 /* Set terminal background color */
 void editorSetBackgroundColor(int color) {
+    /* Clear screen first */
+    write(STDOUT_FILENO, "\x1b[2J", 4);
+    
     if (color == -1) {
         /* Reset to default background */
-        printf("\x1b[49m");
+        write(STDOUT_FILENO, "\x1b[49m", 5);
     } else {
         /* Set 256-color background */
-        printf("\x1b[48;5;%dm", color);
+        char bg_buf[16];
+        int len = snprintf(bg_buf, sizeof(bg_buf), "\x1b[48;5;%dm", color);
+        write(STDOUT_FILENO, bg_buf, len);
     }
-    fflush(stdout);
+    
+    /* Clear screen again to apply background */
+    write(STDOUT_FILENO, "\x1b[2J", 4);
+    write(STDOUT_FILENO, "\x1b[H", 3);
 }
 
 /* Enhanced status bar with theme colors */
@@ -1833,6 +1845,16 @@ void editorRefreshScreen(void) {
     struct abuf ab = ABUF_INIT;
 
     abAppend(&ab,"\x1b[?25l",6); /* Hide cursor. */
+    
+    /* Apply background color at start of refresh */
+    if (current_theme >= 0 && current_theme < NUM_THEMES) {
+        char bg_color[16];
+        int bg_len = snprintf(bg_color, sizeof(bg_color), "\x1b[48;5;%dm", themes[current_theme].bg_color);
+        if (bg_len > 0 && bg_len < sizeof(bg_color)) {
+            abAppend(&ab, bg_color, bg_len);
+        }
+    }
+    
     abAppend(&ab,"\x1b[H",3); /* Go home. */
     for (y = 0; y < E.screenrows; y++) {
         int filerow = E.rowoff+y;
@@ -1844,10 +1866,14 @@ void editorRefreshScreen(void) {
                 int line_num_len = snprintf(line_num, sizeof(line_num), 
                     "%*s ", E.line_numbers_width - 1, "");
                 
-                /* Set line number color from theme */
-                char line_color[16];
-                snprintf(line_color, sizeof(line_color), "\x1b[38;5;%dm", themes[current_theme].line_number_color);
-                abAppend(&ab, line_color, strlen(line_color));
+                /* Set line number color from theme - with bounds checking */
+                if (current_theme >= 0 && current_theme < NUM_THEMES) {
+                    char line_color[16];
+                    int color_len = snprintf(line_color, sizeof(line_color), "\x1b[38;5;%dm", themes[current_theme].line_number_color);
+                    if (color_len > 0 && color_len < sizeof(line_color)) {
+                        abAppend(&ab, line_color, color_len);
+                    }
+                }
                 abAppend(&ab, line_num, line_num_len);
                 abAppend(&ab, "\x1b[39m", 5); /* Reset color */
             }
@@ -1880,10 +1906,14 @@ void editorRefreshScreen(void) {
             int line_num_len = snprintf(line_num, sizeof(line_num), 
                 "%*d ", E.line_numbers_width - 1, current_line);
             
-            /* Use theme-specific color for line numbers */
-            char line_color[16];
-            snprintf(line_color, sizeof(line_color), "\x1b[38;5;%dm", themes[current_theme].line_number_color);
-            abAppend(&ab, line_color, strlen(line_color));
+            /* Use theme-specific color for line numbers - with bounds checking */
+            if (current_theme >= 0 && current_theme < NUM_THEMES) {
+                char line_color[16];
+                int color_len = snprintf(line_color, sizeof(line_color), "\x1b[38;5;%dm", themes[current_theme].line_number_color);
+                if (color_len > 0 && color_len < sizeof(line_color)) {
+                    abAppend(&ab, line_color, color_len);
+                }
+            }
             abAppend(&ab, line_num, line_num_len);
             abAppend(&ab, "\x1b[0m", 4); /* Reset formatting */
         }
@@ -1952,11 +1982,12 @@ void editorRefreshScreen(void) {
     int filerow = E.rowoff+E.cy;
     erow *row = (filerow >= E.numrows) ? NULL : &E.row[filerow];
     if (row) {
-        for (j = E.coloff; j < (E.cx+E.coloff); j++) {
-            if (j < row->size && row->chars[j] == TAB) {
-                cx += 7-((cx-1)%8); /* Fix tab calculation by accounting for 0-based indexing */
+        for (j = E.coloff; j < (E.cx+E.coloff) && j < row->size; j++) {
+            if (row->chars[j] == TAB) {
+                cx += (8 - (cx % 8)); /* Proper tab alignment */
+            } else {
+                cx++;
             }
-            cx++;
         }
     }
     snprintf(buf,sizeof(buf),"\x1b[%d;%dH",E.cy+1,cx);
@@ -2267,8 +2298,10 @@ void initEditor(void) {
     editorUpdateLineNumberWidth();  /* Initialize line number width */
     signal(SIGWINCH, handleSigWinCh);
     
-    /* Set initial background color */
-    editorSetBackgroundColor(themes[current_theme].bg_color);
+    /* Set initial background color with bounds checking */
+    if (current_theme >= 0 && current_theme < NUM_THEMES) {
+        editorSetBackgroundColor(themes[current_theme].bg_color);
+    }
 }
 
 int xcodex_main(int argc, char **argv) {
