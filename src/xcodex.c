@@ -1880,7 +1880,7 @@ void editorRefreshScreen(void) {
 
     abAppend(&ab,"\x1b[?25l",6); /* Hide cursor. */
     
-    /* Apply background color at start of refresh */
+    /* Apply background color at start of refresh and clear entire screen */
     if (current_theme >= 0 && current_theme < NUM_THEMES) {
         char bg_color[16];
         int bg_len = snprintf(bg_color, sizeof(bg_color), "\x1b[48;5;%dm", themes[current_theme].bg_color);
@@ -1889,6 +1889,8 @@ void editorRefreshScreen(void) {
         }
     }
     
+    /* Clear entire screen with background color, then go home */
+    abAppend(&ab,"\x1b[2J",4); /* Clear entire screen */
     abAppend(&ab,"\x1b[H",3); /* Go home. */
     for (y = 0; y < E.screenrows; y++) {
         int filerow = E.rowoff+y;
@@ -1960,7 +1962,16 @@ void editorRefreshScreen(void) {
             
             /* Reset colors and clear to end of line */
             abAppend(&ab,"\x1b[39m",5);  /* Reset foreground */
-            abAppend(&ab,"\x1b[49m",5);  /* Reset background */
+            
+            /* Reapply theme background color before clearing */
+            if (current_theme >= 0 && current_theme < NUM_THEMES) {
+                char bg_color[16];
+                int bg_len = snprintf(bg_color, sizeof(bg_color), "\x1b[48;5;%dm", themes[current_theme].bg_color);
+                if (bg_len > 0 && bg_len < sizeof(bg_color)) {
+                    abAppend(&ab, bg_color, bg_len);
+                }
+            }
+            
             abAppend(&ab,"\x1b[0K",4);   /* Clear to end of line */
             abAppend(&ab,"\r\n",2);
             continue;
@@ -2053,8 +2064,17 @@ void editorRefreshScreen(void) {
         }
         
         abAppend(&ab,"\x1b[39m",5);  /* Reset foreground color */
-        abAppend(&ab,"\x1b[49m",5);  /* Reset background color */
-        abAppend(&ab,"\x1b[0K",4);   /* Clear to end of line */
+        
+        /* Reapply background color before clearing to end of line */
+        if (current_theme >= 0 && current_theme < NUM_THEMES) {
+            char bg_color[16];
+            int bg_len = snprintf(bg_color, sizeof(bg_color), "\x1b[48;5;%dm", themes[current_theme].bg_color);
+            if (bg_len > 0 && bg_len < sizeof(bg_color)) {
+                abAppend(&ab, bg_color, bg_len);
+            }
+        }
+        
+        abAppend(&ab,"\x1b[0K",4);   /* Clear to end of line (preserves background) */
         abAppend(&ab,"\r\n",2);
     }
 
@@ -2062,6 +2082,14 @@ void editorRefreshScreen(void) {
     editorDrawStatusBar(&ab);
 
     /* Second row depends on E.statusmsg and the status message update time. */
+    /* Reapply background color before clearing status message line */
+    if (current_theme >= 0 && current_theme < NUM_THEMES) {
+        char bg_color[16];
+        int bg_len = snprintf(bg_color, sizeof(bg_color), "\x1b[48;5;%dm", themes[current_theme].bg_color);
+        if (bg_len > 0 && bg_len < sizeof(bg_color)) {
+            abAppend(&ab, bg_color, bg_len);
+        }
+    }
     abAppend(&ab,"\x1b[0K",4);
     int msglen = strlen(E.statusmsg);
     if (msglen && time(NULL)-E.statusmsg_time < 5)
