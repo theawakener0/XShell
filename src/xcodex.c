@@ -1917,7 +1917,7 @@ void editorRefreshScreen(void) {
                 abAppend(&ab, "\x1b[39m", 5); /* Reset color */
             }
             
-            /* Apply cursor line background for empty lines */
+            /* Apply cursor line background for empty lines - DISABLED
             if (is_cursor_line && current_theme >= 0 && current_theme < NUM_THEMES) {
                 char cursor_bg[16];
                 int bg_len = snprintf(cursor_bg, sizeof(cursor_bg), "\x1b[48;5;%dm", themes[current_theme].cursor_line_color);
@@ -1925,6 +1925,7 @@ void editorRefreshScreen(void) {
                     abAppend(&ab, cursor_bg, bg_len);
                 }
             }
+            */
             
             if (E.numrows == 0 && y == E.screenrows/3) {
                 char welcome[80];
@@ -1940,24 +1941,26 @@ void editorRefreshScreen(void) {
                 while(padding--) abAppend(&ab," ",1);
                 abAppend(&ab,welcome,welcomelen);
                 
-                /* Fill remaining space for cursor line if needed */
+                /* Fill remaining space for cursor line if needed - DISABLED
                 if (is_cursor_line) {
-                    int chars_used = 1 + (padding > 0 ? padding : 0) + welcomelen; /* ~ + padding + welcome */
+                    int chars_used = 1 + (padding > 0 ? padding : 0) + welcomelen; // ~ + padding + welcome
                     int remaining = effective_cols - chars_used;
                     for (int i = 0; i < remaining; i++) {
                         abAppend(&ab, " ", 1);
                     }
                 }
+                */
             } else {
                 abAppend(&ab,"~",1);
                 
-                /* Fill remaining space for cursor line if needed */
+                /* Fill remaining space for cursor line if needed - DISABLED
                 if (is_cursor_line) {
                     int effective_cols = E.screencols - E.line_numbers_width;
-                    for (int i = 1; i < effective_cols; i++) { /* Start from 1 since ~ is already added */
+                    for (int i = 1; i < effective_cols; i++) { // Start from 1 since ~ is already added
                         abAppend(&ab, " ", 1);
                     }
                 }
+                */
             }
             
             /* Reset colors and clear to end of line */
@@ -1999,7 +2002,8 @@ void editorRefreshScreen(void) {
         }
 
         /* Apply cursor line background color if this is the current line */
-        int is_cursor_line = (filerow == E.rowoff + E.cy);
+        // int is_cursor_line = (filerow == E.rowoff + E.cy);
+        /* Temporarily disabled cursor line highlighting to fix background color consistency
         if (is_cursor_line && current_theme >= 0 && current_theme < NUM_THEMES) {
             char cursor_bg[16];
             int bg_len = snprintf(cursor_bg, sizeof(cursor_bg), "\x1b[48;5;%dm", themes[current_theme].cursor_line_color);
@@ -2007,6 +2011,7 @@ void editorRefreshScreen(void) {
                 abAppend(&ab, cursor_bg, bg_len);
             }
         }
+        */
 
         int len = r->rsize - E.coloff;
         int effective_screencols = E.screencols - E.line_numbers_width;
@@ -2026,12 +2031,12 @@ void editorRefreshScreen(void) {
                         sym = '?';
                     abAppend(&ab,&sym,1);
                     abAppend(&ab,"\x1b[0m",4);
-                    /* Restore cursor line background if needed */
-                    if (is_cursor_line && current_theme >= 0 && current_theme < NUM_THEMES) {
-                        char cursor_bg[16];
-                        int bg_len = snprintf(cursor_bg, sizeof(cursor_bg), "\x1b[48;5;%dm", themes[current_theme].cursor_line_color);
-                        if (bg_len > 0 && bg_len < sizeof(cursor_bg)) {
-                            abAppend(&ab, cursor_bg, bg_len);
+                    /* Restore theme background after reset */
+                    if (current_theme >= 0 && current_theme < NUM_THEMES) {
+                        char bg_color[16];
+                        int bg_len = snprintf(bg_color, sizeof(bg_color), "\x1b[48;5;%dm", themes[current_theme].bg_color);
+                        if (bg_len > 0 && bg_len < sizeof(bg_color)) {
+                            abAppend(&ab, bg_color, bg_len);
                         }
                     }
                 } else if (hl[j] == HL_NORMAL) {
@@ -2053,15 +2058,15 @@ void editorRefreshScreen(void) {
             }
         }
         
-        /* Handle cursor line background extending to end of line */
+        /* Handle cursor line background extending to end of line - DISABLED
         if (is_cursor_line) {
-            /* Fill remaining space with cursor line background */
             int chars_drawn = len > 0 ? (len > effective_screencols ? effective_screencols : len) : 0;
             int remaining_space = effective_screencols - chars_drawn;
             for (int i = 0; i < remaining_space; i++) {
                 abAppend(&ab, " ", 1);
             }
         }
+        */
         
         abAppend(&ab,"\x1b[39m",5);  /* Reset foreground color */
         
@@ -2074,7 +2079,7 @@ void editorRefreshScreen(void) {
             }
         }
         
-        abAppend(&ab,"\x1b[0K",4);   /* Clear to end of line (preserves background) */
+        abAppend(&ab,"\x1b[0K",4);
         abAppend(&ab,"\r\n",2);
     }
 
