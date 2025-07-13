@@ -239,6 +239,7 @@ static int current_theme = 0;
 
 /* Forward declarations */
 void editorSetStatusMessage(const char *fmt, ...);
+void editorSetBackgroundColor(int color);
 
 /* This structure represents a single line of the file we are editing. */
 typedef struct erow {
