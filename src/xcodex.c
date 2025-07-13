@@ -66,6 +66,7 @@ typedef struct {
     int status_bg;
     int status_fg;
     int line_number_color; /* Color for line numbers */
+    int cursor_line_color; /* Color for current line highlighting */
 } theme_t;
 
 /* Neovim-inspired themes */
@@ -95,7 +96,8 @@ theme_t themes[] = {
         15,  /* cursor_color */
         236, /* status_bg */
         248, /* status_fg */
-        240  /* line_number_color - dark grey */
+        240, /* line_number_color - dark grey */
+        236  /* cursor_line_color - dark background for current line */
     },
     {
         "xcodex_light",
@@ -122,7 +124,8 @@ theme_t themes[] = {
         0,   /* cursor_color */
         252, /* status_bg */
         16,  /* status_fg */
-        102  /* line_number_color - blue grey */
+        102, /* line_number_color - blue grey */
+        254  /* cursor_line_color - light grey for current line */
     },
     {
         "gruvbox_dark",
@@ -149,7 +152,8 @@ theme_t themes[] = {
         223, /* cursor_color */
         237, /* status_bg */
         223, /* status_fg */
-        245  /* line_number_color - grey */
+        245, /* line_number_color - grey */
+        237  /* cursor_line_color - slightly lighter dark */
     },
     {
         "tokyo_night_dark",
@@ -176,7 +180,8 @@ theme_t themes[] = {
         169, /* cursor_color */
         235, /* status_bg */
         169, /* status_fg */
-        102  /* line_number_color - blue grey */
+        102, /* line_number_color - blue grey */
+        235  /* cursor_line_color - slightly lighter blue */
     },
     {
         "tokyo_night_light",
@@ -203,7 +208,8 @@ theme_t themes[] = {
         52,  /* cursor_color */
         252, /* status_bg */
         52,  /* status_fg */
-        102  /* line_number_color - blue grey */
+        102, /* line_number_color - blue grey */
+        253  /* cursor_line_color - very light grey */
     },
     {
         "tokyo_night_storm",
@@ -230,7 +236,8 @@ theme_t themes[] = {
         188, /* cursor_color */
         237, /* status_bg */
         188, /* status_fg */
-        102  /* line_number_color - blue grey */
+        102, /* line_number_color - blue grey */
+        235  /* cursor_line_color - dark grey */
     }
 };
 
@@ -1459,22 +1466,17 @@ void editorSelectSyntaxHighlight(char *filename) {
 
 /* Set terminal background color */
 void editorSetBackgroundColor(int color) {
-    /* Clear screen first */
-    write(STDOUT_FILENO, "\x1b[2J", 4);
-    
     if (color == -1) {
         /* Reset to default background */
-        write(STDOUT_FILENO, "\x1b[49m", 5);
+        write(STDOUT_FILENO, "\x1b[49m\x1b[2J\x1b[H", 12);
     } else {
         /* Set 256-color background */
-        char bg_buf[16];
-        int len = snprintf(bg_buf, sizeof(bg_buf), "\x1b[48;5;%dm", color);
-        write(STDOUT_FILENO, bg_buf, len);
+        char bg_buf[32];
+        int len = snprintf(bg_buf, sizeof(bg_buf), "\x1b[48;5;%dm\x1b[2J\x1b[H", color);
+        if (len > 0 && len < sizeof(bg_buf)) {
+            write(STDOUT_FILENO, bg_buf, len);
+        }
     }
-    
-    /* Clear screen again to apply background */
-    write(STDOUT_FILENO, "\x1b[2J", 4);
-    write(STDOUT_FILENO, "\x1b[H", 3);
 }
 
 /* Enhanced status bar with theme colors */
@@ -1519,6 +1521,8 @@ void editorDrawStatusBar(struct abuf *ab) {
 
 /* Update the rendered version and the syntax highlight of a row. */
 void editorUpdateRow(erow *row) {
+    if (!row) return;
+    
     unsigned int tabs = 0, nonprint = 0;
     int j, idx;
 
@@ -1529,25 +1533,29 @@ void editorUpdateRow(erow *row) {
         if (row->chars[j] == TAB) tabs++;
 
     unsigned long long allocsize =
-        (unsigned long long) row->size + tabs*8 + nonprint*9 + 1;
+        (unsigned long long) row->size + tabs*4 + nonprint*9 + 1;
     if (allocsize > UINT32_MAX) {
         printf("Some line of the edited file is too long for xcodex\n");
         exit(1);
     }
 
-    row->render = malloc(row->size + tabs*8 + nonprint*9 + 1);
+    row->render = malloc(row->size + tabs*4 + nonprint*9 + 1);
+    if (!row->render) {
+        printf("Out of memory!\n");
+        exit(1);
+    }
     idx = 0;
     for (j = 0; j < row->size; j++) {
         if (row->chars[j] == TAB) {
             row->render[idx++] = ' ';
-            while((idx+1) % 8 != 0) row->render[idx++] = ' ';
+            while(idx % 4 != 0) row->render[idx++] = ' ';
         } else {
             row->render[idx++] = row->chars[j];
         }
     }
     row->rsize = idx;
     row->render[idx] = '\0';
-
+    
     /* Update the syntax highlighting attributes of the row. */
     editorUpdateSyntax(row);
 }
@@ -1555,15 +1563,24 @@ void editorUpdateRow(erow *row) {
 /* Insert a row at the specified position, shifting the other rows on the bottom
  * if required. */
 void editorInsertRow(int at, char *s, size_t len) {
-    if (at > E.numrows) return;
+    if (at < 0 || at > E.numrows || !s) return;
     E.row = realloc(E.row,sizeof(erow)*(E.numrows+1));
+    if (!E.row) {
+        printf("Out of memory!\n");
+        exit(1);
+    }
     if (at != E.numrows) {
         memmove(E.row+at+1,E.row+at,sizeof(E.row[0])*(E.numrows-at));
         for (int j = at+1; j <= E.numrows; j++) E.row[j].idx++;
     }
     E.row[at].size = len;
     E.row[at].chars = malloc(len+1);
-    memcpy(E.row[at].chars,s,len+1);
+    if (!E.row[at].chars) {
+        printf("Out of memory!\n");
+        exit(1);
+    }
+    memcpy(E.row[at].chars,s,len);
+    E.row[at].chars[len] = '\0';
     E.row[at].hl = NULL;
     E.row[at].hl_oc = 0;
     E.row[at].render = NULL;
@@ -1577,9 +1594,16 @@ void editorInsertRow(int at, char *s, size_t len) {
 
 /* Free row's heap allocated stuff. */
 void editorFreeRow(erow *row) {
-    free(row->render);
-    free(row->chars);
-    free(row->hl);
+    if (row) {
+        free(row->render);
+        free(row->chars);
+        free(row->hl);
+        row->render = NULL;
+        row->chars = NULL;
+        row->hl = NULL;
+        row->size = 0;
+        row->rsize = 0;
+    }
 }
 
 /* Remove the row at the specified position, shifting the remainign on the
@@ -1587,7 +1611,7 @@ void editorFreeRow(erow *row) {
 void editorDelRow(int at) {
     erow *row;
 
-    if (at >= E.numrows) return;
+    if (at < 0 || at >= E.numrows) return;
     row = E.row+at;
     editorFreeRow(row);
     memmove(E.row+at,E.row+at+1,sizeof(E.row[0])*(E.numrows-at-1));
@@ -1626,12 +1650,18 @@ char *editorRowsToString(int *buflen) {
 /* Insert a character at the specified position in a row, moving the remaining
  * chars on the right if needed. */
 void editorRowInsertChar(erow *row, int at, int c) {
+    if (!row || at < 0) return;
+    
     if (at > row->size) {
         /* Pad the string with spaces if the insert location is outside the
          * current length by more than a single character. */
         int padlen = at-row->size;
         /* In the next line +2 means: new char and null term. */
         row->chars = realloc(row->chars,row->size+padlen+2);
+        if (!row->chars) {
+            printf("Out of memory!\n");
+            exit(1);
+        }
         memset(row->chars+row->size,' ',padlen);
         row->chars[row->size+padlen+1] = '\0';
         row->size += padlen+1;
@@ -1639,6 +1669,10 @@ void editorRowInsertChar(erow *row, int at, int c) {
         /* If we are in the middle of the string just make space for 1 new
          * char plus the (already existing) null term. */
         row->chars = realloc(row->chars,row->size+2);
+        if (!row->chars) {
+            printf("Out of memory!\n");
+            exit(1);
+        }
         memmove(row->chars+at+1,row->chars+at,row->size-at+1);
         row->size++;
     }
@@ -1659,7 +1693,7 @@ void editorRowAppendString(erow *row, char *s, size_t len) {
 
 /* Delete the character at offset 'at' from the specified row. */
 void editorRowDelChar(erow *row, int at) {
-    if (row->size <= at) return;
+    if (!row || at < 0 || row->size <= at) return;
     memmove(row->chars+at,row->chars+at+1,row->size-at);
     editorUpdateRow(row);
     row->size--;
@@ -1860,6 +1894,9 @@ void editorRefreshScreen(void) {
         int filerow = E.rowoff+y;
 
         if (filerow >= E.numrows) {
+            /* Check if this empty line is the cursor line */
+            int is_cursor_line = (filerow == E.rowoff + E.cy);
+            
             /* Draw line numbers for empty lines */
             if (E.show_line_numbers) {
                 char line_num[16];
@@ -1878,10 +1915,19 @@ void editorRefreshScreen(void) {
                 abAppend(&ab, "\x1b[39m", 5); /* Reset color */
             }
             
+            /* Apply cursor line background for empty lines */
+            if (is_cursor_line && current_theme >= 0 && current_theme < NUM_THEMES) {
+                char cursor_bg[16];
+                int bg_len = snprintf(cursor_bg, sizeof(cursor_bg), "\x1b[48;5;%dm", themes[current_theme].cursor_line_color);
+                if (bg_len > 0 && bg_len < sizeof(cursor_bg)) {
+                    abAppend(&ab, cursor_bg, bg_len);
+                }
+            }
+            
             if (E.numrows == 0 && y == E.screenrows/3) {
                 char welcome[80];
                 int welcomelen = snprintf(welcome,sizeof(welcome),
-                    "XCodex editor -- version %s -- Theme: %s\x1b[0K\r\n", 
+                    "XCodex editor -- version %s -- Theme: %s", 
                     XCODEX_VERSION, themes[current_theme].name);
                 int effective_cols = E.screencols - E.line_numbers_width;
                 int padding = (effective_cols - welcomelen)/2;
@@ -1891,9 +1937,32 @@ void editorRefreshScreen(void) {
                 }
                 while(padding--) abAppend(&ab," ",1);
                 abAppend(&ab,welcome,welcomelen);
+                
+                /* Fill remaining space for cursor line if needed */
+                if (is_cursor_line) {
+                    int chars_used = 1 + (padding > 0 ? padding : 0) + welcomelen; /* ~ + padding + welcome */
+                    int remaining = effective_cols - chars_used;
+                    for (int i = 0; i < remaining; i++) {
+                        abAppend(&ab, " ", 1);
+                    }
+                }
             } else {
-                abAppend(&ab,"~\x1b[0K\r\n",7);
+                abAppend(&ab,"~",1);
+                
+                /* Fill remaining space for cursor line if needed */
+                if (is_cursor_line) {
+                    int effective_cols = E.screencols - E.line_numbers_width;
+                    for (int i = 1; i < effective_cols; i++) { /* Start from 1 since ~ is already added */
+                        abAppend(&ab, " ", 1);
+                    }
+                }
             }
+            
+            /* Reset colors and clear to end of line */
+            abAppend(&ab,"\x1b[39m",5);  /* Reset foreground */
+            abAppend(&ab,"\x1b[49m",5);  /* Reset background */
+            abAppend(&ab,"\x1b[0K",4);   /* Clear to end of line */
+            abAppend(&ab,"\r\n",2);
             continue;
         }
 
@@ -1918,6 +1987,16 @@ void editorRefreshScreen(void) {
             abAppend(&ab, "\x1b[0m", 4); /* Reset formatting */
         }
 
+        /* Apply cursor line background color if this is the current line */
+        int is_cursor_line = (filerow == E.rowoff + E.cy);
+        if (is_cursor_line && current_theme >= 0 && current_theme < NUM_THEMES) {
+            char cursor_bg[16];
+            int bg_len = snprintf(cursor_bg, sizeof(cursor_bg), "\x1b[48;5;%dm", themes[current_theme].cursor_line_color);
+            if (bg_len > 0 && bg_len < sizeof(cursor_bg)) {
+                abAppend(&ab, cursor_bg, bg_len);
+            }
+        }
+
         int len = r->rsize - E.coloff;
         int effective_screencols = E.screencols - E.line_numbers_width;
         int current_color = -1;
@@ -1936,6 +2015,14 @@ void editorRefreshScreen(void) {
                         sym = '?';
                     abAppend(&ab,&sym,1);
                     abAppend(&ab,"\x1b[0m",4);
+                    /* Restore cursor line background if needed */
+                    if (is_cursor_line && current_theme >= 0 && current_theme < NUM_THEMES) {
+                        char cursor_bg[16];
+                        int bg_len = snprintf(cursor_bg, sizeof(cursor_bg), "\x1b[48;5;%dm", themes[current_theme].cursor_line_color);
+                        if (bg_len > 0 && bg_len < sizeof(cursor_bg)) {
+                            abAppend(&ab, cursor_bg, bg_len);
+                        }
+                    }
                 } else if (hl[j] == HL_NORMAL) {
                     if (current_color != -1) {
                         abAppend(&ab,"\x1b[39m",5);
@@ -1954,8 +2041,20 @@ void editorRefreshScreen(void) {
                 }
             }
         }
-        abAppend(&ab,"\x1b[39m",5);
-        abAppend(&ab,"\x1b[0K",4);
+        
+        /* Handle cursor line background extending to end of line */
+        if (is_cursor_line) {
+            /* Fill remaining space with cursor line background */
+            int chars_drawn = len > 0 ? (len > effective_screencols ? effective_screencols : len) : 0;
+            int remaining_space = effective_screencols - chars_drawn;
+            for (int i = 0; i < remaining_space; i++) {
+                abAppend(&ab, " ", 1);
+            }
+        }
+        
+        abAppend(&ab,"\x1b[39m",5);  /* Reset foreground color */
+        abAppend(&ab,"\x1b[49m",5);  /* Reset background color */
+        abAppend(&ab,"\x1b[0K",4);   /* Clear to end of line */
         abAppend(&ab,"\r\n",2);
     }
 
@@ -1971,7 +2070,6 @@ void editorRefreshScreen(void) {
     /* Put cursor at its current position. Note that the horizontal position
      * at which the cursor is displayed may be different compared to 'E.cx'
      * because of TABs. */
-    int j;
     int cx = 1; /* Start at position 1 */
     
     /* Add line number width offset if line numbers are enabled */
@@ -1980,15 +2078,20 @@ void editorRefreshScreen(void) {
     }
     
     int filerow = E.rowoff+E.cy;
-    erow *row = (filerow >= E.numrows) ? NULL : &E.row[filerow];
+    erow *row = (filerow >= 0 && filerow < E.numrows) ? &E.row[filerow] : NULL;
     if (row) {
-        for (j = E.coloff; j < (E.cx+E.coloff) && j < row->size; j++) {
+        int rx = 0;
+        int j;
+        for (j = 0; j < E.cx && j < row->size; j++) {
             if (row->chars[j] == TAB) {
-                cx += (8 - (cx % 8)); /* Proper tab alignment */
+                rx += (4 - (rx % 4));
             } else {
-                cx++;
+                rx++;
             }
         }
+        cx += rx;
+    } else {
+        cx += E.cx;
     }
     snprintf(buf,sizeof(buf),"\x1b[%d;%dH",E.cy+1,cx);
     abAppend(&ab,buf,strlen(buf));
