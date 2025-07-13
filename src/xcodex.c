@@ -65,6 +65,7 @@ typedef struct {
     int cursor_color;
     int status_bg;
     int status_fg;
+    int line_number_color; /* Color for line numbers */
 } theme_t;
 
 /* Neovim-inspired themes */
@@ -93,7 +94,8 @@ theme_t themes[] = {
         0,   /* bg_color */
         15,  /* cursor_color */
         236, /* status_bg */
-        248  /* status_fg */
+        248, /* status_fg */
+        240  /* line_number_color - dark grey */
     },
     {
         "xcodex_light",
@@ -119,7 +121,8 @@ theme_t themes[] = {
         15,  /* bg_color */
         0,   /* cursor_color */
         252, /* status_bg */
-        16   /* status_fg */
+        16,  /* status_fg */
+        102  /* line_number_color - blue grey */
     },
     {
         "gruvbox_dark",
@@ -145,7 +148,8 @@ theme_t themes[] = {
         235, /* bg_color */
         223, /* cursor_color */
         237, /* status_bg */
-        223  /* status_fg */
+        223, /* status_fg */
+        245  /* line_number_color - grey */
     },
     {
         "tokyo_night_dark",
@@ -171,7 +175,8 @@ theme_t themes[] = {
         234, /* bg_color - dark blue */
         169, /* cursor_color */
         235, /* status_bg */
-        169  /* status_fg */
+        169, /* status_fg */
+        102  /* line_number_color - blue grey */
     },
     {
         "tokyo_night_light",
@@ -197,7 +202,8 @@ theme_t themes[] = {
         255, /* bg_color - white */
         52,  /* cursor_color */
         252, /* status_bg */
-        52   /* status_fg */
+        52,  /* status_fg */
+        102  /* line_number_color - blue grey */
     },
     {
         "tokyo_night_storm",
@@ -223,7 +229,8 @@ theme_t themes[] = {
         236, /* bg_color - storm dark */
         188, /* cursor_color */
         237, /* status_bg */
-        188  /* status_fg */
+        188, /* status_fg */
+        102  /* line_number_color - blue grey */
     }
 };
 
@@ -285,6 +292,10 @@ void editorSwitchTheme(int theme_index) {
         return;
     }
     current_theme = theme_index;
+    
+    /* Apply background color */
+    editorSetBackgroundColor(themes[current_theme].bg_color);
+    
     /* Update the status message to reflect the new theme */
     editorSetStatusMessage("Theme: %s (%d/%d) - Use Ctrl+T to cycle", 
                         themes[current_theme].name, 
@@ -295,6 +306,10 @@ void editorSwitchTheme(int theme_index) {
 /* Enhanced theme cycling with better feedback */
 void editorCycleTheme(void) {
     current_theme = (current_theme + 1) % NUM_THEMES;
+    
+    /* Apply background color */
+    editorSetBackgroundColor(themes[current_theme].bg_color);
+    
     editorSetStatusMessage("Theme: %s (%d/%d) - Use Ctrl+T to cycle", 
                         themes[current_theme].name,
                         current_theme + 1,
@@ -1061,6 +1076,8 @@ void disableRawMode(int fd) {
 /* Called at exit to avoid remaining in raw mode. */
 void editorAtExit(void) {
     disableRawMode(STDIN_FILENO);
+    /* Reset background color */
+    editorSetBackgroundColor(-1);
     /* Clear the screen and reposition cursor at top-left on exit. */
     if (write(STDOUT_FILENO, "\x1b[2J", 4) == -1) {
         perror("write");
@@ -1433,6 +1450,18 @@ void editorSelectSyntaxHighlight(char *filename) {
             i++;
         }
     }
+}
+
+/* Set terminal background color */
+void editorSetBackgroundColor(int color) {
+    if (color == -1) {
+        /* Reset to default background */
+        printf("\x1b[49m");
+    } else {
+        /* Set 256-color background */
+        printf("\x1b[48;5;%dm", color);
+    }
+    fflush(stdout);
 }
 
 /* Enhanced status bar with theme colors */
@@ -1814,8 +1843,10 @@ void editorRefreshScreen(void) {
                 int line_num_len = snprintf(line_num, sizeof(line_num), 
                     "%*s ", E.line_numbers_width - 1, "");
                 
-                /* Set line number color (grey) */
-                abAppend(&ab, "\x1b[38;5;240m", 10);
+                /* Set line number color from theme */
+                char line_color[16];
+                snprintf(line_color, sizeof(line_color), "\x1b[38;5;%dm", themes[current_theme].line_number_color);
+                abAppend(&ab, line_color, strlen(line_color));
                 abAppend(&ab, line_num, line_num_len);
                 abAppend(&ab, "\x1b[39m", 5); /* Reset color */
             }
@@ -1848,14 +1879,10 @@ void editorRefreshScreen(void) {
             int line_num_len = snprintf(line_num, sizeof(line_num), 
                 "%*d ", E.line_numbers_width - 1, current_line);
             
-            /* Highlight current line number with theme colors */
-            if (filerow == E.rowoff + E.cy) {
-                abAppend(&ab, "\x1b[38;5;220m", 10); /* Yellow for current line */
-                abAppend(&ab, "\x1b[1m", 4); /* Bold */
-            } else {
-                abAppend(&ab, "\x1b[38;5;240m", 10); /* Grey for other lines */
-            }
-            
+            /* Use theme-specific color for line numbers */
+            char line_color[16];
+            snprintf(line_color, sizeof(line_color), "\x1b[38;5;%dm", themes[current_theme].line_number_color);
+            abAppend(&ab, line_color, strlen(line_color));
             abAppend(&ab, line_num, line_num_len);
             abAppend(&ab, "\x1b[0m", 4); /* Reset formatting */
         }
@@ -1914,12 +1941,20 @@ void editorRefreshScreen(void) {
      * at which the cursor is displayed may be different compared to 'E.cx'
      * because of TABs. */
     int j;
-    int cx = 1 + E.line_numbers_width; /* Account for line numbers */
+    int cx = 1; /* Start at position 1 */
+    
+    /* Add line number width offset if line numbers are enabled */
+    if (E.show_line_numbers) {
+        cx += E.line_numbers_width;
+    }
+    
     int filerow = E.rowoff+E.cy;
     erow *row = (filerow >= E.numrows) ? NULL : &E.row[filerow];
     if (row) {
         for (j = E.coloff; j < (E.cx+E.coloff); j++) {
-            if (j < row->size && row->chars[j] == TAB) cx += 7-((cx)%8);
+            if (j < row->size && row->chars[j] == TAB) {
+                cx += 7-((cx-1)%8); /* Fix tab calculation by accounting for 0-based indexing */
+            }
             cx++;
         }
     }
@@ -2150,8 +2185,7 @@ void editorProcessKeypress(int fd) {
         editorFind(fd);
         break;
     case CTRL_T:        /* Ctrl-t - cycle themes */
-        current_theme = (current_theme + 1) % NUM_THEMES;
-        editorSetStatusMessage("Theme: %s", themes[current_theme].name);
+        editorCycleTheme(); /* Use the enhanced function instead */
         break;
     case CTRL_N:        /* Ctrl-n - toggle line numbers */
         editorToggleLineNumbers();
@@ -2231,6 +2265,9 @@ void initEditor(void) {
     updateWindowSize();
     editorUpdateLineNumberWidth();  /* Initialize line number width */
     signal(SIGWINCH, handleSigWinCh);
+    
+    /* Set initial background color */
+    editorSetBackgroundColor(themes[current_theme].bg_color);
 }
 
 int xcodex_main(int argc, char **argv) {
