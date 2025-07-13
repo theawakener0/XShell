@@ -2013,6 +2013,15 @@ void editorRefreshScreen(void) {
         }
         */
 
+        /* Apply theme background color at the start of each line */
+        if (current_theme >= 0 && current_theme < NUM_THEMES) {
+            char bg_color[16];
+            int bg_len = snprintf(bg_color, sizeof(bg_color), "\x1b[48;5;%dm", themes[current_theme].bg_color);
+            if (bg_len > 0 && bg_len < sizeof(bg_color)) {
+                abAppend(&ab, bg_color, bg_len);
+            }
+        }
+
         int len = r->rsize - E.coloff;
         int effective_screencols = E.screencols - E.line_numbers_width;
         int current_color = -1;
@@ -2041,8 +2050,16 @@ void editorRefreshScreen(void) {
                     }
                 } else if (hl[j] == HL_NORMAL) {
                     if (current_color != -1) {
-                        abAppend(&ab,"\x1b[39m",5);
+                        abAppend(&ab,"\x1b[39m",5);  /* Reset foreground only */
                         current_color = -1;
+                        /* Reapply background color after foreground reset */
+                        if (current_theme >= 0 && current_theme < NUM_THEMES) {
+                            char bg_color[16];
+                            int bg_len = snprintf(bg_color, sizeof(bg_color), "\x1b[48;5;%dm", themes[current_theme].bg_color);
+                            if (bg_len > 0 && bg_len < sizeof(bg_color)) {
+                                abAppend(&ab, bg_color, bg_len);
+                            }
+                        }
                     }
                     abAppend(&ab,c+j,1);
                 } else {
