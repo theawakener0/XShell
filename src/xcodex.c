@@ -272,9 +272,8 @@ void editorSetBackgroundColor(int color);
 void editorMoveCursor(int key);
 void editorInsertNewline(void);
 void editorDelChar(void);
-void editorRowDelChar(erow *row, int at);
 void editorInsertChar(int c);
-void editorSave(void);
+int editorSave(void);
 void editorFind(int fd);
 void xcodex_execute_command(char *command);
 
@@ -289,6 +288,9 @@ typedef struct erow {
     int hl_oc;          /* Row had open comment at end in last syntax highlight
                            check. */
 } erow;
+
+/* Forward declarations that need erow */
+void editorRowDelChar(erow *row, int at);
 
 typedef struct hlcolor {
     int r,g,b;
@@ -2641,7 +2643,7 @@ void editorMoveCursor(int key) {
 /* ============================ XCodex Modal Key Processing ============================ */
 
 /* Forward declarations */
-void xcodex_process_normal_mode(int c, int *quit_times);
+void xcodex_process_normal_mode(int c, int *quit_times, int fd);
 void xcodex_process_insert_mode(int c, int *quit_times);
 void xcodex_process_visual_mode(int c);
 void xcodex_process_command_mode(int c);
@@ -2656,7 +2658,7 @@ void editorProcessKeypress(int fd) {
     /* Route key to appropriate mode handler */
     switch (E.mode) {
         case XCODEX_MODE_NORMAL:
-            xcodex_process_normal_mode(c, &quit_times);
+            xcodex_process_normal_mode(c, &quit_times, fd);
             break;
         case XCODEX_MODE_INSERT:
             xcodex_process_insert_mode(c, &quit_times);
@@ -2671,7 +2673,7 @@ void editorProcessKeypress(int fd) {
 }
 
 /* Process keys in NORMAL mode - Navigation and commands */
-void xcodex_process_normal_mode(int c, int *quit_times) {
+void xcodex_process_normal_mode(int c, int *quit_times, int fd) {
     /* Handle number prefixes for motions (e.g., 5j) */
     if (isdigit(c) && (c != '0' || E.motion_count > 0)) {
         /* Prevent integer overflow */
@@ -2778,7 +2780,7 @@ void xcodex_process_normal_mode(int c, int *quit_times) {
             
         /* ==== File Movement ==== */
         case 'G':  /* Go to line (or last line if no count) */
-            if (E.motion_count == 0) {
+            if (count == 1) {  /* No prefix number given */
                 xcodex_go_to_last_line();
             } else {
                 xcodex_go_to_line(count);
