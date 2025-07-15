@@ -2,6 +2,28 @@
 
 #define XCODEX_VERSION "0.1"
 
+/* ============================ XCodex Modal System ============================ */
+
+/* Editor Modes - Simple and Intuitive */
+#define XCODEX_MODE_NORMAL     0  /* Navigate and execute commands */
+#define XCODEX_MODE_INSERT     1  /* Insert text */
+#define XCODEX_MODE_VISUAL     2  /* Select text */
+#define XCODEX_MODE_COMMAND    3  /* Execute commands */
+
+/* Motion Types for consistent movement */
+#define XCODEX_MOTION_CHAR     0  /* Character-wise movement */
+#define XCODEX_MOTION_WORD     1  /* Word-wise movement */
+#define XCODEX_MOTION_LINE     2  /* Line-wise movement */
+#define XCODEX_MOTION_SCREEN   3  /* Screen-wise movement */
+
+/* Key Constants */
+#define XCODEX_KEY_ESC         27
+#define XCODEX_KEY_CTRL_C      3
+#define XCODEX_KEY_CTRL_D      4
+#define XCODEX_KEY_CTRL_U      21
+#define XCODEX_KEY_CTRL_F      6
+#define XCODEX_KEY_CTRL_B      2
+
 /* POSIX-only feature */
 #if !defined(_WIN32) && !defined(_WIN64)
 #define XCODEX_ENABLED 1
@@ -247,6 +269,14 @@ static int current_theme = 0;
 /* Forward declarations */
 void editorSetStatusMessage(const char *fmt, ...);
 void editorSetBackgroundColor(int color);
+void editorMoveCursor(int key);
+void editorInsertNewline(void);
+void editorDelChar(void);
+void editorRowDelChar(erow *row, int at);
+void editorInsertChar(int c);
+void editorSave(void);
+void editorFind(int fd);
+void xcodex_execute_command(char *command);
 
 /* This structure represents a single line of the file we are editing. */
 typedef struct erow {
@@ -280,6 +310,18 @@ struct editorConfig {
     struct editorSyntax *syntax;    /* Current syntax highlight, or NULL. */
     int show_line_numbers; /* Show line numbers */
     int line_numbers_width; /* Width of line numbers */
+    
+    /* ============================ XCodex Modal System State ============================ */
+    int mode;                    /* Current editor mode */
+    int motion_count;            /* Number prefix for motions (e.g., 5j) */
+    char command_buffer[32];     /* Buffer for multi-character commands */
+    int command_len;             /* Length of current command */
+    int visual_start_row;        /* Visual selection start row */
+    int visual_start_col;        /* Visual selection start column */
+    int visual_end_row;          /* Visual selection end row */
+    int visual_end_col;          /* Visual selection end column */
+    char last_search[256];       /* Last search pattern */
+    int search_direction;        /* 1 for forward, -1 for backward */
 };
 
 static struct editorConfig E;
@@ -353,6 +395,260 @@ void editorToggleLineNumbers(void) {
     editorUpdateLineNumberWidth();
     editorSetStatusMessage("Line numbers: %s (Ctrl+N to toggle)", 
                         E.show_line_numbers ? "ON" : "OFF");
+}
+
+/* ============================ XCodex Modal System Functions ============================ */
+
+/* Get human-readable mode name for status display */
+const char* xcodex_get_mode_name(int mode) {
+    switch (mode) {
+        case XCODEX_MODE_NORMAL:  return "NORMAL";
+        case XCODEX_MODE_INSERT:  return "INSERT";
+        case XCODEX_MODE_VISUAL:  return "VISUAL";
+        case XCODEX_MODE_COMMAND: return "COMMAND";
+        default:                  return "UNKNOWN";
+    }
+}
+
+/* Switch editor mode with proper state management */
+void xcodex_set_mode(int new_mode) {
+    if (E.mode == new_mode) return;
+    
+    /* Save current state if needed */
+    int old_mode = E.mode;
+    E.mode = new_mode;
+    
+    /* Reset mode-specific state */
+    E.motion_count = 0;
+    E.command_len = 0;
+    E.command_buffer[0] = '\0';
+    
+    /* Mode-specific initialization */
+    switch (new_mode) {
+        case XCODEX_MODE_NORMAL:
+            /* When entering normal mode, ensure cursor is on valid character */
+            if (E.numrows > 0) {
+                int filerow = E.rowoff + E.cy;
+                if (filerow >= 0 && filerow < E.numrows && E.cx > 0) {
+                    erow *row = &E.row[filerow];
+                    if (E.cx >= row->size && row->size > 0) {
+                        E.cx = row->size - 1;
+                    }
+                }
+            }
+            editorSetStatusMessage("-- %s --", xcodex_get_mode_name(new_mode));
+            break;
+            
+        case XCODEX_MODE_INSERT:
+            editorSetStatusMessage("-- %s --", xcodex_get_mode_name(new_mode));
+            break;
+            
+        case XCODEX_MODE_VISUAL:
+            /* Initialize visual selection */
+            E.visual_start_row = E.cy;
+            E.visual_start_col = E.cx;
+            E.visual_end_row = E.cy;
+            E.visual_end_col = E.cx;
+            editorSetStatusMessage("-- %s --", xcodex_get_mode_name(new_mode));
+            break;
+            
+        case XCODEX_MODE_COMMAND:
+            editorSetStatusMessage(":");
+            break;
+    }
+}
+
+/* Initialize modal system */
+void xcodex_init_modal_system(void) {
+    E.mode = XCODEX_MODE_NORMAL;
+    E.motion_count = 0;
+    E.command_len = 0;
+    E.command_buffer[0] = '\0';
+    E.visual_start_row = 0;
+    E.visual_start_col = 0;
+    E.visual_end_row = 0;
+    E.visual_end_col = 0;
+    E.last_search[0] = '\0';
+    E.search_direction = 1;
+}
+
+/* ============================ XCodex Motion Functions ============================ */
+
+/* Check if character is a word boundary */
+int xcodex_is_word_boundary(char c) {
+    return !isalnum(c) && c != '_';
+}
+
+/* Move cursor to start of line (0) */
+void xcodex_move_line_start(void) {
+    E.cx = 0;
+    E.coloff = 0;
+}
+
+/* Move cursor to end of line ($) */
+void xcodex_move_line_end(void) {
+    int filerow = E.rowoff + E.cy;
+    if (filerow >= E.numrows || filerow < 0) return;
+    
+    erow *row = &E.row[filerow];
+    int target_col = row->size > 0 ? row->size - 1 : 0;
+    
+    int effective_cols = E.screencols - E.line_numbers_width;
+    if (target_col >= effective_cols) {
+        E.coloff = target_col - effective_cols + 1;
+        E.cx = effective_cols - 1;
+    } else {
+        E.cx = target_col;
+        E.coloff = 0;
+    }
+}
+
+/* Move to next word (w) */
+void xcodex_move_word_forward(int count) {
+    for (int i = 0; i < count; i++) {
+        int filerow = E.rowoff + E.cy;
+        if (filerow >= E.numrows) break;
+        
+        erow *row = &E.row[filerow];
+        int filecol = E.coloff + E.cx;
+        
+        /* Skip current word */
+        while (filecol < row->size && !xcodex_is_word_boundary(row->chars[filecol])) {
+            filecol++;
+        }
+        
+        /* Skip whitespace */
+        while (filecol < row->size && xcodex_is_word_boundary(row->chars[filecol])) {
+            filecol++;
+        }
+        
+        /* Move to next line if at end */
+        if (filecol >= row->size && filerow < E.numrows - 1) {
+            E.cy++;
+            E.cx = 0;
+            E.coloff = 0;
+            if (E.cy >= E.screenrows) {
+                E.rowoff++;
+                E.cy = E.screenrows - 1;
+            }
+        } else {
+            /* Update cursor position */
+            int effective_cols = E.screencols - E.line_numbers_width;
+            if (filecol >= E.coloff + effective_cols) {
+                E.coloff = filecol - effective_cols + 1;
+                E.cx = effective_cols - 1;
+            } else {
+                E.cx = filecol - E.coloff;
+            }
+        }
+    }
+}
+
+/* Move to previous word (b) */
+void xcodex_move_word_backward(int count) {
+    for (int i = 0; i < count; i++) {
+        int filerow = E.rowoff + E.cy;
+        if (filerow < 0) break;
+        
+        int filecol = E.coloff + E.cx;
+        
+        if (filecol == 0) {
+            /* Move to previous line */
+            if (filerow > 0) {
+                E.cy--;
+                if (E.cy < 0) {
+                    E.rowoff--;
+                    E.cy = 0;
+                }
+                
+                /* Bounds check before accessing row */
+                int new_filerow = E.rowoff + E.cy;
+                if (new_filerow >= 0 && new_filerow < E.numrows) {
+                    erow *row = &E.row[new_filerow];
+                    filecol = row->size;
+                    E.cx = filecol;
+                    E.coloff = 0;
+                    
+                    int effective_cols = E.screencols - E.line_numbers_width;
+                    if (E.cx >= effective_cols) {
+                        E.coloff = E.cx - effective_cols + 1;
+                        E.cx = effective_cols - 1;
+                    }
+                }
+            }
+        } else {
+            /* Bounds check before accessing row */
+            if (filerow >= 0 && filerow < E.numrows) {
+                erow *row = &E.row[filerow];
+                filecol--;
+                
+                /* Skip whitespace */
+                while (filecol > 0 && xcodex_is_word_boundary(row->chars[filecol])) {
+                    filecol--;
+                }
+                
+                /* Skip word characters */
+                while (filecol > 0 && !xcodex_is_word_boundary(row->chars[filecol])) {
+                    filecol--;
+                }
+                
+                if (filecol > 0) filecol++; /* Move to start of word */
+                
+                /* Update cursor position */
+                if (filecol < E.coloff) {
+                    E.coloff = filecol;
+                    E.cx = 0;
+                } else {
+                    E.cx = filecol - E.coloff;
+                }
+            }
+        }
+    }
+}
+
+/* Go to specific line (G or :number) */
+void xcodex_go_to_line(int line) {
+    if (line < 1) line = 1;
+    if (E.numrows == 0) return;  /* No lines to go to */
+    if (line > E.numrows) line = E.numrows;
+    
+    line--; /* Convert to 0-based */
+    
+    E.cy = 0;
+    E.rowoff = line;
+    E.cx = 0;
+    E.coloff = 0;
+    
+    /* Adjust if line is within screen */
+    if (line < E.screenrows) {
+        E.cy = line;
+        E.rowoff = 0;
+    }
+}
+
+/* Go to first line (gg) */
+void xcodex_go_to_first_line(void) {
+    E.cy = 0;
+    E.rowoff = 0;
+    E.cx = 0;
+    E.coloff = 0;
+}
+
+/* Go to last line (G) */
+void xcodex_go_to_last_line(void) {
+    if (E.numrows == 0) return;  /* No lines to go to */
+    
+    int last_line = E.numrows - 1;
+    E.cy = 0;
+    E.rowoff = last_line;
+    E.cx = 0;
+    E.coloff = 0;
+    
+    /* Adjust if line is within screen */
+    if (last_line < E.screenrows) {
+        E.cy = last_line;
+        E.rowoff = 0;
+    }
 }
 
 enum KEY_ACTION{
@@ -1479,7 +1775,7 @@ void editorSetBackgroundColor(int color) {
     }
 }
 
-/* Enhanced status bar with theme colors */
+/* Enhanced status bar with theme colors and mode display */
 void editorDrawStatusBar(struct abuf *ab) {
     abAppend(ab,"\x1b[0K",4);
     
@@ -1494,9 +1790,11 @@ void editorDrawStatusBar(struct abuf *ab) {
     abAppend(ab, status_fg, strlen(status_fg));
 
     char status[80], rstatus[80];
-    int len = snprintf(status, sizeof(status), " %.15s - %d lines %s | Theme: %s | Line#: %s",
+    int len = snprintf(status, sizeof(status), " %.15s - %d lines %s | %s | Theme: %s | Line#: %s",
         E.filename ? E.filename : "[No Name]", E.numrows, 
-        E.dirty ? "(modified)" : "", themes[current_theme].name,
+        E.dirty ? "(modified)" : "", 
+        xcodex_get_mode_name(E.mode),
+        themes[current_theme].name,
         E.show_line_numbers ? "ON" : "OFF");
     
     int rlen = snprintf(rstatus, sizeof(rstatus),
@@ -2339,79 +2637,441 @@ void editorMoveCursor(int key) {
 /* Process events arriving from the standard input, which is, the user
  * is typing stuff on the terminal. */
 #define XCODEX_QUIT_TIMES 3
+
+/* ============================ XCodex Modal Key Processing ============================ */
+
+/* Forward declarations */
+void xcodex_process_normal_mode(int c, int *quit_times);
+void xcodex_process_insert_mode(int c, int *quit_times);
+void xcodex_process_visual_mode(int c);
+void xcodex_process_command_mode(int c);
+
 void editorProcessKeypress(int fd) {
     /* When the file is modified, requires Ctrl-q to be pressed N times
      * before actually quitting. */
     static int quit_times = XCODEX_QUIT_TIMES;
 
     int c = editorReadKey(fd);
-    switch(c) {
-    case ENTER:         /* Enter */
-        editorInsertNewline();
-        break;
-    case CTRL_C:        /* Ctrl-c */
-        /* We ignore ctrl-c, it can't be so simple to lose the changes
-         * to the edited file. */
-        break;
-    case CTRL_Q:        /* Ctrl-q */
-        /* Quit if the file was already saved. */
-        if (E.dirty && quit_times) {
-            editorSetStatusMessage("WARNING!!! File has unsaved changes. "
-                "Press Ctrl-Q %d more times to quit.", quit_times);
-            quit_times--;
+    
+    /* Route key to appropriate mode handler */
+    switch (E.mode) {
+        case XCODEX_MODE_NORMAL:
+            xcodex_process_normal_mode(c, &quit_times);
+            break;
+        case XCODEX_MODE_INSERT:
+            xcodex_process_insert_mode(c, &quit_times);
+            break;
+        case XCODEX_MODE_VISUAL:
+            xcodex_process_visual_mode(c);
+            break;
+        case XCODEX_MODE_COMMAND:
+            xcodex_process_command_mode(c);
+            break;
+    }
+}
+
+/* Process keys in NORMAL mode - Navigation and commands */
+void xcodex_process_normal_mode(int c, int *quit_times) {
+    /* Handle number prefixes for motions (e.g., 5j) */
+    if (isdigit(c) && (c != '0' || E.motion_count > 0)) {
+        /* Prevent integer overflow */
+        if (E.motion_count < 1000) {
+            E.motion_count = E.motion_count * 10 + (c - '0');
+            editorSetStatusMessage("-- NORMAL -- %d", E.motion_count);
+        }
+        return;
+    }
+    
+    int count = E.motion_count > 0 ? E.motion_count : 1;
+    /* Limit count to prevent excessive operations */
+    if (count > 1000) count = 1000;
+    E.motion_count = 0;
+    
+    switch (c) {
+        /* ==== Mode Switching ==== */
+        case 'i':  /* Insert before cursor */
+            xcodex_set_mode(XCODEX_MODE_INSERT);
+            break;
+        case 'I':  /* Insert at beginning of line */
+            xcodex_move_line_start();
+            xcodex_set_mode(XCODEX_MODE_INSERT);
+            break;
+        case 'a':  /* Insert after cursor */
+            if (E.cx < E.screencols - E.line_numbers_width - 1) {
+                int filerow = E.rowoff + E.cy;
+                if (filerow >= 0 && filerow < E.numrows) {
+                    erow *row = &E.row[filerow];
+                    int filecol = E.coloff + E.cx;
+                    if (filecol < row->size) {
+                        E.cx++;
+                    }
+                }
+            }
+            xcodex_set_mode(XCODEX_MODE_INSERT);
+            break;
+        case 'A':  /* Insert at end of line */
+            xcodex_move_line_end();
+            if (E.cx < E.screencols - E.line_numbers_width - 1) {
+                E.cx++;
+            }
+            xcodex_set_mode(XCODEX_MODE_INSERT);
+            break;
+        case 'o':  /* Open new line below */
+            xcodex_move_line_end();
+            editorInsertNewline();
+            xcodex_set_mode(XCODEX_MODE_INSERT);
+            break;
+        case 'O':  /* Open new line above */
+            xcodex_move_line_start();
+            editorInsertNewline();
+            editorMoveCursor(ARROW_UP);
+            xcodex_set_mode(XCODEX_MODE_INSERT);
+            break;
+        case 'v':  /* Visual mode */
+            xcodex_set_mode(XCODEX_MODE_VISUAL);
+            break;
+        case ':':  /* Command mode */
+            xcodex_set_mode(XCODEX_MODE_COMMAND);
+            break;
+            
+        /* ==== Basic Movement (hjkl) ==== */
+        case 'h':
+        case ARROW_LEFT:
+            for (int i = 0; i < count; i++) {
+                editorMoveCursor(ARROW_LEFT);
+            }
+            break;
+        case 'j':
+        case ARROW_DOWN:
+            for (int i = 0; i < count; i++) {
+                editorMoveCursor(ARROW_DOWN);
+            }
+            break;
+        case 'k':
+        case ARROW_UP:
+            for (int i = 0; i < count; i++) {
+                editorMoveCursor(ARROW_UP);
+            }
+            break;
+        case 'l':
+        case ARROW_RIGHT:
+            for (int i = 0; i < count; i++) {
+                editorMoveCursor(ARROW_RIGHT);
+            }
+            break;
+            
+        /* ==== Word Movement ==== */
+        case 'w':  /* Next word */
+            xcodex_move_word_forward(count);
+            break;
+        case 'b':  /* Previous word */
+            xcodex_move_word_backward(count);
+            break;
+            
+        /* ==== Line Movement ==== */
+        case '0':  /* Start of line */
+            xcodex_move_line_start();
+            break;
+        case '$':  /* End of line */
+            xcodex_move_line_end();
+            break;
+            
+        /* ==== File Movement ==== */
+        case 'G':  /* Go to line (or last line if no count) */
+            if (E.motion_count == 0) {
+                xcodex_go_to_last_line();
+            } else {
+                xcodex_go_to_line(count);
+            }
+            break;
+        case 'g':  /* Handle gg command */
+            if (E.command_len == 0) {
+                E.command_buffer[0] = 'g';
+                E.command_len = 1;
+                E.command_buffer[1] = '\0';  /* Ensure null termination */
+                editorSetStatusMessage("-- NORMAL -- g");
+                return;
+            } else if (E.command_len == 1 && E.command_buffer[0] == 'g') {
+                xcodex_go_to_first_line();
+                E.command_len = 0;
+                E.command_buffer[0] = '\0';
+            }
+            break;
+            
+        /* ==== Editing Commands ==== */
+        case 'x':  /* Delete character */
+            for (int i = 0; i < count; i++) {
+                int filerow = E.rowoff + E.cy;
+                int filecol = E.coloff + E.cx;
+                if (filerow >= 0 && filerow < E.numrows) {
+                    erow *row = &E.row[filerow];
+                    if (filecol >= 0 && filecol < row->size) {
+                        editorRowDelChar(row, filecol);
+                    }
+                }
+            }
+            break;
+        case 'X':  /* Delete character before cursor */
+            for (int i = 0; i < count; i++) {
+                editorDelChar();
+            }
+            break;
+            
+        /* ==== File Operations ==== */
+        case CTRL_S:  /* Save file */
+            editorSave();
+            break;
+        case CTRL_Q:  /* Quit */
+            if (E.dirty && *quit_times) {
+                editorSetStatusMessage("WARNING!!! File has unsaved changes. "
+                    "Press Ctrl-Q %d more times to quit.", *quit_times);
+                (*quit_times)--;
+                return;
+            }
+            exit(0);
+            break;
+            
+        /* ==== Search ==== */
+        case '/':  /* Search forward */
+        case CTRL_F:
+            editorFind(fd);
+            break;
+            
+        /* ==== Display ==== */
+        case CTRL_T:  /* Cycle themes */
+            editorCycleTheme();
+            break;
+        case CTRL_N:  /* Toggle line numbers */
+            editorToggleLineNumbers();
+            break;
+            
+        /* ==== Screen Movement ==== */
+        case PAGE_UP:
+        case PAGE_DOWN:
+            if (c == PAGE_UP && E.cy != 0)
+                E.cy = 0;
+            else if (c == PAGE_DOWN && E.cy != E.screenrows-1)
+                E.cy = E.screenrows-1;
+            {
+                int times = E.screenrows;
+                while(times--)
+                    editorMoveCursor(c == PAGE_UP ? ARROW_UP : ARROW_DOWN);
+            }
+            break;
+            
+        /* ==== Escape and Unknown ==== */
+        case ESC:
+            E.command_len = 0;
+            E.command_buffer[0] = '\0';
+            editorSetStatusMessage("-- NORMAL --");
+            break;
+            
+        default:
+            if (E.command_len > 0) {
+                E.command_len = 0;
+                E.command_buffer[0] = '\0';
+                editorSetStatusMessage("-- NORMAL --");
+            }
+            break;
+    }
+    
+    *quit_times = XCODEX_QUIT_TIMES;
+}
+
+/* Process keys in INSERT mode - Text insertion */
+void xcodex_process_insert_mode(int c, int *quit_times) {
+    switch (c) {
+        case ESC:  /* Exit to normal mode */
+        case CTRL_C:
+            xcodex_set_mode(XCODEX_MODE_NORMAL);
+            /* Move cursor left when exiting insert mode (vim behavior) */
+            if (E.cx > 0) {
+                E.cx--;
+            } else if (E.coloff > 0) {
+                E.coloff--;
+            }
+            break;
+            
+        case ENTER:  /* Insert newline */
+            editorInsertNewline();
+            break;
+            
+        case BACKSPACE:  /* Delete character */
+        case CTRL_H:
+        case DEL_KEY:
+            editorDelChar();
+            break;
+            
+        case ARROW_UP:  /* Arrow key movement in insert mode */
+        case ARROW_DOWN:
+        case ARROW_LEFT:
+        case ARROW_RIGHT:
+            editorMoveCursor(c);
+            break;
+            
+        case CTRL_S:  /* Save file */
+            editorSave();
+            break;
+            
+        case CTRL_Q:  /* Quit */
+            if (E.dirty && *quit_times) {
+                editorSetStatusMessage("WARNING!!! File has unsaved changes. "
+                    "Press Ctrl-Q %d more times to quit.", *quit_times);
+                (*quit_times)--;
+                return;
+            }
+            exit(0);
+            break;
+            
+        default:
+            if (isprint(c)) {
+                editorInsertChar(c);
+            }
+            break;
+    }
+    
+    *quit_times = XCODEX_QUIT_TIMES;
+}
+
+/* Process keys in VISUAL mode - Text selection */
+void xcodex_process_visual_mode(int c) {
+    switch (c) {
+        case ESC:  /* Exit to normal mode */
+        case CTRL_C:
+            xcodex_set_mode(XCODEX_MODE_NORMAL);
+            break;
+            
+        /* Movement keys update selection */
+        case 'h':
+        case ARROW_LEFT:
+            editorMoveCursor(ARROW_LEFT);
+            E.visual_end_row = E.cy;
+            E.visual_end_col = E.cx;
+            break;
+        case 'j':
+        case ARROW_DOWN:
+            editorMoveCursor(ARROW_DOWN);
+            E.visual_end_row = E.cy;
+            E.visual_end_col = E.cx;
+            break;
+        case 'k':
+        case ARROW_UP:
+            editorMoveCursor(ARROW_UP);
+            E.visual_end_row = E.cy;
+            E.visual_end_col = E.cx;
+            break;
+        case 'l':
+        case ARROW_RIGHT:
+            editorMoveCursor(ARROW_RIGHT);
+            E.visual_end_row = E.cy;
+            E.visual_end_col = E.cx;
+            break;
+            
+        case 'w':  /* Word movement */
+            xcodex_move_word_forward(1);
+            E.visual_end_row = E.cy;
+            E.visual_end_col = E.cx;
+            break;
+        case 'b':
+            xcodex_move_word_backward(1);
+            E.visual_end_row = E.cy;
+            E.visual_end_col = E.cx;
+            break;
+            
+        case '0':  /* Line movement */
+            xcodex_move_line_start();
+            E.visual_end_row = E.cy;
+            E.visual_end_col = E.cx;
+            break;
+        case '$':
+            xcodex_move_line_end();
+            E.visual_end_row = E.cy;
+            E.visual_end_col = E.cx;
+            break;
+            
+        /* Actions on selection */
+        case 'x':
+        case 'd':
+            editorSetStatusMessage("Visual deletion not yet implemented");
+            xcodex_set_mode(XCODEX_MODE_NORMAL);
+            break;
+        case 'y':
+            editorSetStatusMessage("Visual yanking not yet implemented");
+            xcodex_set_mode(XCODEX_MODE_NORMAL);
+            break;
+            
+        default:
+            break;
+    }
+}
+
+/* Process keys in COMMAND mode - Ex commands */
+void xcodex_process_command_mode(int c) {
+    static char cmd_buffer[256];
+    static int cmd_len = 0;
+    
+    switch (c) {
+        case ESC:  /* Exit to normal mode */
+        case CTRL_C:
+            cmd_len = 0;
+            cmd_buffer[0] = '\0';
+            xcodex_set_mode(XCODEX_MODE_NORMAL);
+            break;
+            
+        case ENTER:  /* Execute command */
+            cmd_buffer[cmd_len] = '\0';
+            xcodex_execute_command(cmd_buffer);
+            cmd_len = 0;
+            cmd_buffer[0] = '\0';
+            xcodex_set_mode(XCODEX_MODE_NORMAL);
+            break;
+            
+        case BACKSPACE:  /* Delete character */
+        case CTRL_H:
+            if (cmd_len > 0) {
+                cmd_len--;
+                cmd_buffer[cmd_len] = '\0';
+                editorSetStatusMessage(":%s", cmd_buffer);
+            } else {
+                xcodex_set_mode(XCODEX_MODE_NORMAL);
+            }
+            break;
+            
+        default:
+            if (isprint(c) && cmd_len < sizeof(cmd_buffer) - 1) {
+                cmd_buffer[cmd_len++] = c;
+                cmd_buffer[cmd_len] = '\0';
+                editorSetStatusMessage(":%s", cmd_buffer);
+            }
+            break;
+    }
+}
+
+/* Execute command mode commands */
+void xcodex_execute_command(char *command) {
+    if (!command) return;  /* Null check */
+    
+    if (strcmp(command, "q") == 0) {
+        if (E.dirty) {
+            editorSetStatusMessage("No write since last change (use :q! to override)");
             return;
         }
         exit(0);
-        break;
-    case CTRL_S:        /* Ctrl-s */
+    } else if (strcmp(command, "q!") == 0) {
+        exit(0);
+    } else if (strcmp(command, "w") == 0) {
         editorSave();
-        break;
-    case CTRL_F:
-        editorFind(fd);
-        break;
-    case CTRL_T:        /* Ctrl-t - cycle themes */
-        editorCycleTheme(); /* Use the enhanced function instead */
-        break;
-    case CTRL_N:        /* Ctrl-n - toggle line numbers */
-        editorToggleLineNumbers();
-        break;
-    case BACKSPACE:     /* Backspace */
-    case CTRL_H:        /* Ctrl-h */
-    case DEL_KEY:
-        editorDelChar();
-        break;
-    case PAGE_UP:
-    case PAGE_DOWN:
-        if (c == PAGE_UP && E.cy != 0)
-            E.cy = 0;
-        else if (c == PAGE_DOWN && E.cy != E.screenrows-1)
-            E.cy = E.screenrows-1;
-        {
-        int times = E.screenrows;
-        while(times--)
-            editorMoveCursor(c == PAGE_UP ? ARROW_UP:
-                                            ARROW_DOWN);
+    } else if (strcmp(command, "wq") == 0) {
+        editorSave();
+        exit(0);
+    } else if (strlen(command) > 0 && command[0] >= '1' && command[0] <= '9') {
+        int line = atoi(command);
+        if (line > 0) {  /* Ensure positive line number */
+            xcodex_go_to_line(line);
         }
-        break;
-
-    case ARROW_UP:
-    case ARROW_DOWN:
-    case ARROW_LEFT:
-    case ARROW_RIGHT:
-        editorMoveCursor(c);
-        break;
-    case CTRL_L: /* ctrl+l, clear screen */
-        /* Just refresht the line as side effect. */
-        break;
-    case ESC:
-        /* Nothing to do for ESC in this mode. */
-        break;
-    default:
-        editorInsertChar(c);
-        break;
+    } else if (strlen(command) > 0) {
+        editorSetStatusMessage("Unknown command: %s", command);
     }
-
-    quit_times = XCODEX_QUIT_TIMES; /* Reset it to the original value. */
 }
 
 int editorFileWasModified(void) {
@@ -2447,6 +3107,10 @@ void initEditor(void) {
     E.syntax = NULL;
     E.show_line_numbers = 1;        /* Line numbers ON by default */
     E.line_numbers_width = 0;
+    
+    /* Initialize modal system */
+    xcodex_init_modal_system();
+    
     updateWindowSize();
     editorUpdateLineNumberWidth();  /* Initialize line number width */
     signal(SIGWINCH, handleSigWinCh);
