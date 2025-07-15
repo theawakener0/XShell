@@ -1299,6 +1299,328 @@ char *Java_HL_keywords[] = {
     NULL
 };
 
+/* ========================= Markdown Syntax Highlighting ========================= */
+
+char *Markdown_HL_extensions[] = {".md",".markdown",".mdown",".mkd",".mkdn",NULL};
+char *Markdown_HL_keywords[] = {
+    /* Markdown Headers (HL_KEYWORD1) */
+    "#","##","###","####","#####","######",
+    
+    /* Markdown Emphasis and Formatting (HL_KEYWORD2) */
+    "**|","__","*|","_|","`|","```|","~~|","==|",
+    "***|","___","^|","~|",
+    
+    /* Markdown Code Blocks and Languages (HL_KEYWORD2) */
+    "```c|","```cpp|","```python|","```javascript|","```typescript|",
+    "```html|","```css|","```java|","```rust|","```go|","```php|",
+    "```ruby|","```swift|","```kotlin|","```scala|","```shell|",
+    "```bash|","```sql|","```json|","```xml|","```yaml|","```toml|",
+    "```dockerfile|","```makefile|","```lua|","```perl|","```r|",
+    "```matlab|","```latex|","```markdown|","```diff|","```vim|",
+    
+    /* Markdown Links, Images, and References (HL_KEYWORD3) */
+    "http://||","https://||","ftp://||","mailto://||","file://||",
+    "www.||","[||","]||","(||",")||","<||",">||","![||",
+    
+    /* Markdown Lists and Structure (HL_KEYWORD3) */
+    "-||","+||","*||","1.||","2.||","3.||","4.||","5.||","6.||",
+    "7.||","8.||","9.||","10.||",">||",">>||",">>>||",
+    
+    /* Markdown Tables and Separators (HL_KEYWORD3) */
+    "||\|||","---||","***||","___||",":::||","---|",":-:|",":--|","--:|",
+    
+    /* Markdown Task Lists (HL_KEYWORD3) */
+    "- [ ]||","- [x]||","- [X]||","+ [ ]||","+ [x]||","+ [X]||",
+    "* [ ]||","* [x]||","* [X]||",
+    
+    /* Markdown Footnotes and References (HL_KEYWORD3) */
+    "[^||","^]||","[1]||","[2]||","[3]||","[4]||","[5]||",
+    
+    /* Markdown HTML Tags (HL_KEYWORD3) */
+    "<br>||","<hr>||","<div>||","</div>||","<span>||","</span>||",
+    "<p>||","</p>||","<pre>||","</pre>||","<code>||","</code>||",
+    "<kbd>||","</kbd>||","<sub>||","</sub>||","<sup>||","</sup>||",
+    "<mark>||","</mark>||","<del>||","</del>||","<ins>||","</ins>||",
+    
+    /* Markdown Metadata and Front Matter (HL_KEYWORD3) */
+    "---||","+++||","title:||","author:||","date:||","tags:||",
+    "categories:||","description:||","draft:||","slug:||","weight:||",
+    "layout:||","template:||","permalink:||","published:||","updated:||",
+    
+    /* Common Markdown Keywords and Annotations (HL_KEYWORD3) */
+    "TODO||","FIXME||","NOTE||","WARNING||","IMPORTANT||","DANGER||",
+    "TIP||","INFO||","BUG||","HACK||","REVIEW||","OPTIMIZE||",
+    "DEPRECATED||","REMOVED||","ADDED||","CHANGED||","SECURITY||",
+    
+    /* Mathematical Notation (HL_KEYWORD3) */
+    "$$||","$||","\\(||","\\)||","\\[||","\\]||","\\begin||","\\end||",
+    
+    /* Markdown Extensions (HL_KEYWORD3) */
+    ":::||","!!!||","???||","!!!note||","!!!warning||","!!!danger||",
+    "!!!tip||","!!!info||","!!!example||","!!!quote||","!!!success||",
+    "!!!failure||","!!!bug||","!!!abstract||","!!!summary||",
+    
+    /* Mermaid Diagrams (HL_KEYWORD3) */
+    "```mermaid||","graph||","flowchart||","sequenceDiagram||","classDiagram||",
+    "stateDiagram||","gantt||","pie||","journey||","gitgraph||",
+    
+    /* Common File Extensions in Code Blocks (HL_KEYWORD2) */
+    "```txt|","```log|","```ini|","```conf|","```cfg|","```properties|",
+    "```env|","```gitignore|","```gitattributes|","```editorconfig|",
+    "```tsconfig|","```webpack|","```package|","```composer|","```gemfile|",
+    "```requirements|","```poetry|","```cargo|","```gradle|","```maven|",
+    
+    /* Markdown Link Definitions (HL_KEYWORD3) */
+    "[def]:||","[link]:||","[image]:||","[reference]:||","[anchor]:||",
+    
+    /* Admonition Types (HL_KEYWORD3) */
+    "!!! note||","!!! warning||","!!! danger||","!!! tip||","!!! info||",
+    "!!! example||","!!! quote||","!!! success||","!!! failure||",
+    "!!! bug||","!!! abstract||","!!! summary||","!!! question||",
+    
+    NULL
+};
+
+/* ========================= LaTeX Syntax Highlighting ========================= */
+
+char *LaTeX_HL_extensions[] = {".tex",".latex",".sty",".cls",".bib",NULL};
+char *LaTeX_HL_keywords[] = {
+    /* LaTeX Document Structure Commands (HL_KEYWORD1) */
+    "\\documentclass","\\usepackage","\\begin","\\end","\\section",
+    "\\subsection","\\subsubsection","\\paragraph","\\subparagraph",
+    "\\chapter","\\part","\\title","\\author","\\date","\\thanks",
+    "\\maketitle","\\tableofcontents","\\listoffigures","\\listoftables",
+    "\\bibliography","\\bibliographystyle","\\cite","\\nocite","\\bibitem",
+    "\\appendix","\\frontmatter","\\mainmatter","\\backmatter",
+    "\\include","\\input","\\includeonly","\\includegraphics",
+    
+    /* LaTeX Page Layout Commands (HL_KEYWORD1) */
+    "\\newpage","\\clearpage","\\cleardoublepage","\\pagebreak","\\nopagebreak",
+    "\\newline","\\linebreak","\\nolinebreak","\\\\","\\hfill","\\vfill",
+    "\\hspace","\\vspace","\\hskip","\\vskip","\\smallskip","\\medskip","\\bigskip",
+    "\\indent","\\noindent","\\par","\\parskip","\\parindent","\\baselineskip",
+    "\\linespread","\\onehalfspacing","\\doublespacing","\\singlespacing",
+    "\\pagestyle","\\thispagestyle","\\pagenumbering","\\setcounter",
+    "\\addtocounter","\\stepcounter","\\refstepcounter","\\value",
+    
+    /* LaTeX Environments (HL_KEYWORD2) */
+    "document|","figure|","table|","equation|","align|","align*|","eqnarray|",
+    "eqnarray*|","gather|","gather*|","multline|","multline*|","split|",
+    "itemize|","enumerate|","description|","list|","trivlist|","quote|",
+    "quotation|","verse|","verbatim|","verbatim*|","flushleft|","flushright|",
+    "center|","abstract|","titlepage|","thebibliography|","theindex|",
+    "minipage|","parbox|","picture|","tabbing|","tabular|","tabular*|",
+    "array|","matrix|","pmatrix|","bmatrix|","vmatrix|","Vmatrix|",
+    "cases|","proof|","theorem|","lemma|","corollary|","proposition|",
+    "definition|","example|","remark|","note|","problem|","solution|",
+    "algorithmic|","algorithm|","lstlisting|","minted|","longtable|",
+    "sidewaystable|","sidewaysfigure|","multicols|","subequations|",
+    "subfigure|","subtable|","tikzpicture|","pgfpicture|","forest|",
+    
+    /* LaTeX Math Commands and Symbols (HL_KEYWORD3) */
+    "\\frac||","\\dfrac||","\\tfrac||","\\cfrac||","\\binom||","\\sqrt||",
+    "\\sum||","\\prod||","\\int||","\\iint||","\\iiint||","\\oint||",
+    "\\lim||","\\sup||","\\inf||","\\max||","\\min||","\\arg||",
+    "\\sin||","\\cos||","\\tan||","\\sec||","\\csc||","\\cot||",
+    "\\arcsin||","\\arccos||","\\arctan||","\\sinh||","\\cosh||","\\tanh||",
+    "\\log||","\\lg||","\\ln||","\\exp||","\\det||","\\gcd||","\\deg||",
+    "\\dim||","\\ker||","\\hom||","\\Pr||","\\mod||","\\pmod||","\\bmod||",
+    
+    /* Greek Letters */
+    "\\alpha||","\\beta||","\\gamma||","\\delta||","\\epsilon||","\\varepsilon||",
+    "\\zeta||","\\eta||","\\theta||","\\vartheta||","\\iota||","\\kappa||",
+    "\\lambda||","\\mu||","\\nu||","\\xi||","\\pi||","\\varpi||","\\rho||",
+    "\\varrho||","\\sigma||","\\varsigma||","\\tau||","\\upsilon||","\\phi||",
+    "\\varphi||","\\chi||","\\psi||","\\omega||","\\Gamma||","\\Delta||",
+    "\\Theta||","\\Lambda||","\\Xi||","\\Pi||","\\Sigma||","\\Upsilon||",
+    "\\Phi||","\\Psi||","\\Omega||",
+    
+    /* Math Operators and Relations */
+    "\\pm||","\\mp||","\\times||","\\div||","\\cdot||","\\bullet||",
+    "\\circ||","\\ast||","\\star||","\\dagger||","\\ddagger||","\\amalg||",
+    "\\cap||","\\cup||","\\uplus||","\\sqcap||","\\sqcup||","\\wedge||",
+    "\\vee||","\\setminus||","\\wr||","\\diamond||","\\bigtriangleup||",
+    "\\bigtriangledown||","\\triangleleft||","\\triangleright||","\\lhd||",
+    "\\rhd||","\\unlhd||","\\unrhd||","\\oplus||","\\ominus||","\\otimes||",
+    "\\oslash||","\\odot||","\\bigcirc||","\\bigodot||","\\bigoplus||",
+    "\\bigotimes||","\\biguplus||","\\bigwedge||","\\bigvee||","\\bigcap||",
+    "\\bigcup||","\\bigsqcup||",
+    
+    /* Relations */
+    "\\leq||","\\geq||","\\equiv||","\\models||","\\prec||","\\succ||",
+    "\\sim||","\\perp||","\\preceq||","\\succeq||","\\simeq||","\\mid||",
+    "\\ll||","\\gg||","\\asymp||","\\parallel||","\\subset||","\\supset||",
+    "\\approx||","\\bowtie||","\\subseteq||","\\supseteq||","\\cong||",
+    "\\neq||","\\smile||","\\sqsubseteq||","\\sqsupseteq||","\\doteq||",
+    "\\frown||","\\in||","\\ni||","\\propto||","\\vdash||","\\dashv||",
+    "\\notin||","\\not||","\\exists||","\\nexists||","\\forall||",
+    
+    /* Arrows */
+    "\\leftarrow||","\\rightarrow||","\\uparrow||","\\downarrow||",
+    "\\leftrightarrow||","\\updownarrow||","\\Leftarrow||","\\Rightarrow||",
+    "\\Uparrow||","\\Downarrow||","\\Leftrightarrow||","\\Updownarrow||",
+    "\\mapsto||","\\longmapsto||","\\hookleftarrow||","\\hookrightarrow||",
+    "\\leftharpoonup||","\\leftharpoondown||","\\rightharpoonup||",
+    "\\rightharpoondown||","\\rightleftharpoons||","\\iff||","\\to||",
+    "\\gets||","\\longleftarrow||","\\longrightarrow||","\\longleftrightarrow||",
+    "\\Longleftarrow||","\\Longrightarrow||","\\Longleftrightarrow||",
+    "\\nearrow||","\\searrow||","\\swarrow||","\\nwarrow||",
+    
+    /* Delimiters */
+    "\\left||","\\right||","\\bigl||","\\bigr||","\\Bigl||","\\Bigr||",
+    "\\biggl||","\\biggr||","\\Biggl||","\\Biggr||","\\langle||","\\rangle||",
+    "\\lceil||","\\rceil||","\\lfloor||","\\rfloor||","\\ulcorner||",
+    "\\urcorner||","\\llcorner||","\\lrcorner||",
+    
+    /* Math Fonts and Styles */
+    "\\mathrm||","\\mathbf||","\\mathit||","\\mathsf||","\\mathtt||",
+    "\\mathcal||","\\mathfrak||","\\mathbb||","\\boldsymbol||","\\pmb||",
+    "\\text||","\\mbox||","\\hbox||","\\vbox||","\\makebox||","\\framebox||",
+    "\\fbox||","\\boxed||","\\underline||","\\overline||","\\widehat||",
+    "\\widetilde||","\\overleftarrow||","\\overrightarrow||","\\overleftrightarrow||",
+    "\\underleftarrow||","\\underrightarrow||","\\underleftrightarrow||",
+    "\\overbrace||","\\underbrace||","\\overset||","\\underset||",
+    
+    /* Spacing Commands */
+    "\\quad||","\\qquad||","\\,||","\\:||","\\;||","\\!||","\\enspace||",
+    "\\thinspace||","\\negthickspace||","\\negthinspace||","\\negmedspace||",
+    "\\phantom||","\\vphantom||","\\hphantom||","\\smash||","\\mathstrut||",
+    "\\strut||","\\rule||","\\hline||","\\cline||","\\vline||",
+    
+    /* Text Formatting Commands */
+    "\\textbf||","\\textit||","\\textsl||","\\textsc||","\\texttt||",
+    "\\textsf||","\\textrm||","\\textup||","\\textmd||","\\emph||",
+    "\\em||","\\bf||","\\it||","\\sl||","\\sc||","\\tt||","\\sf||",
+    "\\rm||","\\up||","\\md||","\\normalfont||","\\cal||","\\mit||",
+    
+    /* Font Size Commands */
+    "\\tiny||","\\scriptsize||","\\footnotesize||","\\small||","\\normalsize||",
+    "\\large||","\\Large||","\\LARGE||","\\huge||","\\Huge||",
+    
+    /* Alignment and Positioning */
+    "\\centering||","\\raggedright||","\\raggedleft||","\\raggedleft||",
+    "\\flushleft||","\\flushright||","\\center||","\\justify||",
+    "\\hfil||","\\hfill||","\\hfilneg||","\\vfil||","\\vfill||","\\vfilneg||",
+    "\\stretch||","\\dotfill||","\\hrulefill||","\\leaders||","\\cleaders||",
+    
+    /* Cross-references and Citations */
+    "\\label||","\\ref||","\\pageref||","\\eqref||","\\autoref||",
+    "\\nameref||","\\hyperref||","\\cite||","\\citep||","\\citet||",
+    "\\citeauthor||","\\citeyear||","\\citealt||","\\citealp||",
+    "\\citetext||","\\bibentry||","\\fullcite||","\\footcite||",
+    "\\textcite||","\\parencite||","\\smartcite||","\\autocite||",
+    
+    /* Footnotes and Marginalia */
+    "\\footnote||","\\footnotemark||","\\footnotetext||","\\marginpar||",
+    "\\marginparpush||","\\marginnote||","\\sidenote||","\\sidenotemark||",
+    "\\sidenotetext||","\\footnotesize||","\\footnoterule||",
+    
+    /* Lists and Numbering */
+    "\\item||","\\setlength||","\\addtolength||","\\settowidth||",
+    "\\settoheight||","\\settodepth||","\\usecounter||","\\newcounter||",
+    "\\arabic||","\\roman||","\\Roman||","\\alph||","\\Alph||",
+    "\\fnsymbol||","\\labelitemi||","\\labelitemii||","\\labelitemiii||",
+    "\\labelitemiv||","\\labelenumi||","\\labelenumii||","\\labelenumiii||",
+    "\\labelenumiv||","\\theenumi||","\\theenumii||","\\theenumiii||",
+    "\\theenumiv||","\\theitemi||","\\theitemii||","\\theitemiii||",
+    "\\theitemiv||",
+    
+    /* Boxes and Frames */
+    "\\fbox||","\\framebox||","\\makebox||","\\parbox||","\\minipage||",
+    "\\raisebox||","\\savebox||","\\sbox||","\\usebox||","\\newsavebox||",
+    "\\colorbox||","\\fcolorbox||","\\shadowbox||","\\doublebox||",
+    "\\ovalbox||","\\Ovalbox||","\\roundedbox||","\\dashedbox||",
+    
+    /* Tables and Arrays */
+    "\\multicolumn||","\\multirow||","\\cline||","\\hline||","\\toprule||",
+    "\\midrule||","\\bottomrule||","\\addlinespace||","\\morecmidrules||",
+    "\\specialrule||","\\cmidrule||","\\arrayrulewidth||","\\arraycolsep||",
+    "\\tabcolsep||","\\arraystretch||","\\extrarowheight||","\\belowrulesep||",
+    "\\aboverulesep||","\\doublerulesep||","\\heavyrulewidth||",
+    "\\lightrulewidth||","\\cmidrulewidth||","\\abovetopsep||","\\belowbottomsep||",
+    
+    /* Graphics and Figures */
+    "\\includegraphics||","\\graphicspath||","\\DeclareGraphicsExtensions||",
+    "\\rotatebox||","\\scalebox||","\\resizebox||","\\reflectbox||",
+    "\\caption||","\\subcaption||","\\captionof||","\\listoffigures||",
+    "\\listoftables||","\\newfloat||","\\floatname||","\\floatplacement||",
+    "\\suppressfloats||","\\clearpage||","\\afterpage||","\\FloatBarrier||",
+    
+    /* Colors */
+    "\\color||","\\textcolor||","\\colorbox||","\\fcolorbox||",
+    "\\pagecolor||","\\definecolor||","\\colorlet||","\\xcolor||",
+    
+    /* Hyperlinks and URLs */
+    "\\href||","\\url||","\\hyperlink||","\\hypertarget||","\\hypersetup||",
+    "\\autoref||","\\nameref||","\\hyperref||","\\nolinkurl||",
+    
+    /* Special Characters and Symbols */
+    "\\LaTeX||","\\TeX||","\\&||","\\%||","\\#||","\\$||","\\{||","\\}||",
+    "\\textbackslash||","\\textasciicircum||","\\textasciitilde||",
+    "\\textbar||","\\textless||","\\textgreater||","\\textunderscore||",
+    "\\textregistered||","\\texttrademark||","\\textcopyright||",
+    "\\textdegree||","\\textcelsius||","\\textmu||","\\textohm||",
+    "\\texteuro||","\\textsterling||","\\textyen||","\\textcent||",
+    "\\textflorin||","\\textpound||","\\textdollar||","\\textquotedblleft||",
+    "\\textquotedblright||","\\textquoteleft||","\\textquoteright||",
+    "\\guillemotleft||","\\guillemotright||","\\quotedblbase||","\\quotesinglbase||",
+    "\\textellipsis||","\\textendash||","\\textemdash||","\\textvisiblespace||",
+    
+    /* Math Accents and Decorations */
+    "\\hat||","\\check||","\\breve||","\\acute||","\\grave||","\\tilde||",
+    "\\bar||","\\vec||","\\dot||","\\ddot||","\\dddot||","\\ddddot||",
+    "\\mathring||","\\widehat||","\\widetilde||","\\widecheck||",
+    "\\widebreve||","\\widebar||","\\widevec||",
+    
+    /* Theorem-like Environments */
+    "\\newtheorem||","\\theoremstyle||","\\newtheoremstyle||","\\qed||",
+    "\\qedsymbol||","\\proof||","\\endproof||","\\proofname||",
+    
+    /* Special Math Constants */
+    "\\infty||","\\partial||","\\nabla||","\\Box||","\\Diamond||",
+    "\\triangle||","\\angle||","\\measuredangle||","\\sphericalangle||",
+    "\\top||","\\bot||","\\flat||","\\natural||","\\sharp||",
+    "\\clubsuit||","\\diamondsuit||","\\heartsuit||","\\spadesuit||",
+    "\\Re||","\\Im||","\\wp||","\\ell||","\\hbar||","\\imath||","\\jmath||",
+    "\\aleph||","\\beth||","\\gimel||","\\daleth||","\\backslash||",
+    "\\prime||","\\emptyset||","\\varnothing||","\\complement||",
+    
+    /* Units and Measurements (if using siunitx) */
+    "\\si||","\\SI||","\\num||","\\ang||","\\unit||","\\qty||",
+    "\\qtyrange||","\\qtylist||","\\numrange||","\\numlist||",
+    "\\sisetup||","\\DeclareSIUnit||","\\DeclareSIPrefix||",
+    
+    /* Chemistry (if using mhchem) */
+    "\\ce||","\\cee||","\\cf||","\\cfe||","\\isotope||",
+    
+    /* Algorithms and Code */
+    "\\algorithm||","\\algstore||","\\algrestore||","\\algorithmic||",
+    "\\State||","\\Statex||","\\Require||","\\Ensure||","\\While||",
+    "\\EndWhile||","\\For||","\\EndFor||","\\If||","\\ElsIf||","\\Else||",
+    "\\EndIf||","\\Function||","\\EndFunction||","\\Procedure||",
+    "\\EndProcedure||","\\Call||","\\Comment||","\\Return||",
+    "\\lstset||","\\lstinline||","\\lstinputlisting||","\\lstlistoflistings||",
+    "\\mintinline||","\\inputminted||","\\usemintedstyle||",
+    
+    /* Bibliography and Index */
+    "\\printbibliography||","\\addbibresource||","\\bibliography||",
+    "\\bibliographystyle||","\\thebibliography||","\\bibitem||",
+    "\\newblock||","\\index||","\\makeindex||","\\printindex||",
+    "\\indexentry||","\\see||","\\seealso||",
+    
+    /* Miscellaneous Commands */
+    "\\newcommand||","\\renewcommand||","\\providecommand||","\\def||",
+    "\\newenvironment||","\\renewenvironment||","\\newlength||",
+    "\\newdimen||","\\newskip||","\\newmuskip||","\\newbox||",
+    "\\newtoks||","\\newread||","\\newwrite||","\\newcount||",
+    "\\newfam||","\\newif||","\\csname||","\\endcsname||",
+    "\\expandafter||","\\noexpand||","\\protect||","\\string||",
+    "\\meaning||","\\the||","\\number||","\\romannumeral||",
+    "\\jobname||","\\today||","\\TeX||","\\LaTeX||","\\LaTeXe||",
+    
+    NULL
+};
+
 /* Here we define an array of syntax highlights by extensions, keywords,
  * comments delimiters and flags. */
 struct editorSyntax HLDB[] = {
@@ -1370,6 +1692,20 @@ struct editorSyntax HLDB[] = {
         Java_HL_extensions,
         Java_HL_keywords,
         "//","/*","*/",
+        HL_HIGHLIGHT_STRINGS | HL_HIGHLIGHT_NUMBERS
+    },
+    {
+        /* Markdown */
+        Markdown_HL_extensions,
+        Markdown_HL_keywords,
+        "","<!--","-->",
+        HL_HIGHLIGHT_STRINGS
+    },
+    {
+        /* LaTeX */
+        LaTeX_HL_extensions,
+        LaTeX_HL_keywords,
+        "%","","",
         HL_HIGHLIGHT_STRINGS | HL_HIGHLIGHT_NUMBERS
     }
 };
