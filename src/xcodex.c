@@ -455,6 +455,9 @@ void xcodex_set_mode(int new_mode) {
             break;
             
         case XCODEX_MODE_COMMAND:
+            /* Reset command buffer when entering command mode */
+            E.command_len = 0;
+            E.command_buffer[0] = '\0';
             editorSetStatusMessage(":");
             break;
     }
@@ -2414,7 +2417,8 @@ void editorRefreshScreen(void) {
     }
     abAppend(&ab,"\x1b[0K",4);
     int msglen = strlen(E.statusmsg);
-    if (msglen && time(NULL)-E.statusmsg_time < 5)
+    /* Show status message longer in command mode, or within 5 seconds otherwise */
+    if (msglen && (E.mode == XCODEX_MODE_COMMAND || time(NULL)-E.statusmsg_time < 5))
         abAppend(&ab,E.statusmsg,msglen <= E.screencols ? msglen : E.screencols);
 
     /* Put cursor at its current position. Note that the horizontal position
@@ -3017,41 +3021,38 @@ void xcodex_process_visual_mode(int c) {
 
 /* Process keys in COMMAND mode - Ex commands */
 void xcodex_process_command_mode(int c) {
-    static char cmd_buffer[256];
-    static int cmd_len = 0;
-    
     switch (c) {
         case ESC:  /* Exit to normal mode */
         case CTRL_C:
-            cmd_len = 0;
-            cmd_buffer[0] = '\0';
+            E.command_len = 0;
+            E.command_buffer[0] = '\0';
             xcodex_set_mode(XCODEX_MODE_NORMAL);
             break;
             
         case ENTER:  /* Execute command */
-            cmd_buffer[cmd_len] = '\0';
-            xcodex_execute_command(cmd_buffer);
-            cmd_len = 0;
-            cmd_buffer[0] = '\0';
+            E.command_buffer[E.command_len] = '\0';
+            xcodex_execute_command(E.command_buffer);
+            E.command_len = 0;
+            E.command_buffer[0] = '\0';
             xcodex_set_mode(XCODEX_MODE_NORMAL);
             break;
             
         case BACKSPACE:  /* Delete character */
         case CTRL_H:
-            if (cmd_len > 0) {
-                cmd_len--;
-                cmd_buffer[cmd_len] = '\0';
-                editorSetStatusMessage(":%s", cmd_buffer);
+            if (E.command_len > 0) {
+                E.command_len--;
+                E.command_buffer[E.command_len] = '\0';
+                editorSetStatusMessage(":%s", E.command_buffer);
             } else {
                 xcodex_set_mode(XCODEX_MODE_NORMAL);
             }
             break;
             
         default:
-            if (isprint(c) && cmd_len < sizeof(cmd_buffer) - 1) {
-                cmd_buffer[cmd_len++] = c;
-                cmd_buffer[cmd_len] = '\0';
-                editorSetStatusMessage(":%s", cmd_buffer);
+            if (isprint(c) && E.command_len < sizeof(E.command_buffer) - 1) {
+                E.command_buffer[E.command_len++] = c;
+                E.command_buffer[E.command_len] = '\0';
+                editorSetStatusMessage(":%s", E.command_buffer);
             }
             break;
     }
@@ -3070,10 +3071,18 @@ void xcodex_execute_command(char *command) {
     } else if (strcmp(command, "q!") == 0) {
         exit(0);
     } else if (strcmp(command, "w") == 0) {
-        editorSave();
+        if (E.filename) {
+            editorSave();
+        } else {
+            editorSetStatusMessage("No file name");
+        }
     } else if (strcmp(command, "wq") == 0) {
-        editorSave();
-        exit(0);
+        if (E.filename) {
+            editorSave();
+            exit(0);
+        } else {
+            editorSetStatusMessage("No file name");
+        }
     } else if (strlen(command) > 0 && command[0] >= '1' && command[0] <= '9') {
         int line = atoi(command);
         if (line > 0) {  /* Ensure positive line number */
@@ -3081,6 +3090,8 @@ void xcodex_execute_command(char *command) {
         }
     } else if (strlen(command) > 0) {
         editorSetStatusMessage("Unknown command: %s", command);
+    } else {
+        editorSetStatusMessage("Empty command");
     }
 }
 
