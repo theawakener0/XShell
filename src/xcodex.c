@@ -2847,6 +2847,10 @@ void xcodex_process_normal_mode(int c, int *quit_times, int fd) {
             editorToggleLineNumbers();
             break;
             
+        case CTRL_L:  /* Clear screen (refresh) */
+            /* Just refresh the screen as side effect */
+            break;
+            
         /* ==== Screen Movement ==== */
         case PAGE_UP:
         case PAGE_DOWN:
@@ -2902,6 +2906,10 @@ void xcodex_process_insert_mode(int c, int *quit_times) {
         case CTRL_H:
         case DEL_KEY:
             editorDelChar();
+            break;
+            
+        case TAB:  /* Insert tab character */
+            editorInsertChar(c);
             break;
             
         case ARROW_UP:  /* Arrow key movement in insert mode */
