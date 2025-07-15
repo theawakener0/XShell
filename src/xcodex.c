@@ -324,6 +324,7 @@ struct editorConfig {
     int visual_end_col;          /* Visual selection end column */
     char last_search[256];       /* Last search pattern */
     int search_direction;        /* 1 for forward, -1 for backward */
+    int quit_requested;          /* Flag to signal quit request */
 };
 
 static struct editorConfig E;
@@ -475,6 +476,7 @@ void xcodex_init_modal_system(void) {
     E.visual_end_col = 0;
     E.last_search[0] = '\0';
     E.search_direction = 1;
+    E.quit_requested = 0;
 }
 
 /* ============================ XCodex Motion Functions ============================ */
@@ -2834,7 +2836,7 @@ void xcodex_process_normal_mode(int c, int *quit_times, int fd) {
                 (*quit_times)--;
                 return;
             }
-            exit(0);
+            E.quit_requested = 1;
             break;
             
         /* ==== Search ==== */
@@ -2934,7 +2936,7 @@ void xcodex_process_insert_mode(int c, int *quit_times) {
                 (*quit_times)--;
                 return;
             }
-            exit(0);
+            E.quit_requested = 1;
             break;
             
         default:
@@ -3067,9 +3069,9 @@ void xcodex_execute_command(char *command) {
             editorSetStatusMessage("No write since last change (use :q! to override)");
             return;
         }
-        exit(0);
+        E.quit_requested = 1;
     } else if (strcmp(command, "q!") == 0) {
-        exit(0);
+        E.quit_requested = 1;
     } else if (strcmp(command, "w") == 0) {
         if (E.filename) {
             editorSave();
@@ -3079,7 +3081,7 @@ void xcodex_execute_command(char *command) {
     } else if (strcmp(command, "wq") == 0) {
         if (E.filename) {
             editorSave();
-            exit(0);
+            E.quit_requested = 1;
         } else {
             editorSetStatusMessage("No file name");
         }
@@ -3154,7 +3156,7 @@ int xcodex_main(int argc, char **argv) {
     if (enableRawMode(STDIN_FILENO) == -1) return 1;
     editorSetStatusMessage(
         "HELP: Ctrl-S = save | Ctrl-Q = quit | Ctrl-F = find | Ctrl-T = theme | Ctrl-N = line numbers");
-    while(1) {
+    while(!E.quit_requested) {
         editorRefreshScreen();
         editorProcessKeypress(STDIN_FILENO);
     }
