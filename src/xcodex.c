@@ -3161,6 +3161,9 @@ int xcodex_main(int argc, char **argv) {
         editorProcessKeypress(STDIN_FILENO);
     }
     
+    /* Clean up terminal state before exiting */
+    editorAtExit();
+    
     return 1;
 }
 
