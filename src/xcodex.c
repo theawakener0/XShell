@@ -211,7 +211,12 @@ void xcodex_push_undo(int type, int row, int col, const char *data, int data_len
 void xcodex_start_undo_group(void);
 void xcodex_clear_undo_stack(void);
 void xcodex_undo(void);
+#if XCODEX_WINDOWS
 void handleSigWinCh(void);
+#endif
+#if XCODEX_POSIX
+void handleSigWinCh(int sig);
+#endif
 int xcodex_can_undo(void);
 
 typedef struct hlcolor {
