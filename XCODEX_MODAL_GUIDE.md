@@ -9,7 +9,7 @@ XCodex now features a powerful modal editing system inspired by Vim, making it e
 ### 1. NORMAL Mode (Default)
 - **Purpose**: Navigate and execute commands
 - **Indicator**: Status bar shows "NORMAL"
-- **How to enter**: Press `Esc` from any mode, or start XCodex
+- **How to enter**: Press `Esc` - `CTRL-C` from any mode, or start XCodex
 
 ### 2. INSERT Mode
 - **Purpose**: Insert and edit text
@@ -137,7 +137,7 @@ You can prefix most movement commands with a number to repeat them:
 
 | Key | Action | Description |
 |-----|--------|-------------|
-| `Esc` | Exit VISUAL mode | Return to NORMAL mode |
+| `Esc` - `CTRL-C` | Exit VISUAL mode | Return to NORMAL mode |
 | `hjkl` | Extend selection | Move cursor to extend selection |
 | `w`, `b` | Word selection | Extend selection by words |
 | `0`, `$` | Line selection | Extend selection to line boundaries |
@@ -153,7 +153,7 @@ You can prefix most movement commands with a number to repeat them:
 ### Step 2: Mode Switching
 1. Enter INSERT mode with `i`
 2. Type some text
-3. Press `Esc` to return to NORMAL mode
+3. Press `Esc` or `CTRL-C` to return to NORMAL mode
 4. Try other insert commands: `a`, `o`, `A`, `O`
 
 ### Step 3: Basic Editing
@@ -187,7 +187,7 @@ You can prefix most movement commands with a number to repeat them:
 1. Navigate to position (NORMAL mode)
 2. Enter INSERT mode (`i`, `a`, etc.)
 3. Make changes
-4. Press `Esc` to return to NORMAL mode
+4. Press `Esc` or `CTRL-C` to return to NORMAL mode
 
 ### Line operations
 1. `0` - Go to start of line

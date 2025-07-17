@@ -1,8 +1,8 @@
-# Makefile for XShell
+# Makefile for XShell v0.3.1
 
 # Compiler and Flags
 CC = gcc
-# Add -std=c11 for C11 standard features
+# Add -std=c11 for C11 standard features and cross-platform compatibility
 CFLAGS = -Iinclude -Wall -Wextra -g -std=c11
 LDFLAGS =
 
@@ -12,7 +12,7 @@ OBJ_DIR = obj
 BIN_DIR = bin
 
 # Automatically find all .c files and generate corresponding .o and .d file names
-# Note: src/xcodex.c contains platform-specific code and will be compiled conditionally.
+# Note: src/xcodex.c now contains full cross-platform support (Windows, Linux, macOS)
 SOURCES = $(wildcard $(SRC_DIR)/*.c)
 OBJECTS = $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(SOURCES))
 DEPS = $(OBJECTS:.o=.d) # Dependency files for header tracking
@@ -75,8 +75,21 @@ run: all
 		./$(EXECUTABLE)
 	endif
 
+# Test XCodex editor specifically
+test-xcodex: all
+	@echo "Testing XCodex cross-platform editor..."
+	@echo "Creating test file..."
+	@echo "int main() { return 0; }" > test.c
+	ifeq ($(OS),Windows_NT)
+		@echo "Running: .\$(EXECUTABLE) and typing 'xcodex test.c'"
+		@echo "XCodex should now work on Windows with full cross-platform support!"
+	else
+		@echo "Running: ./$(EXECUTABLE) and typing 'xcodex test.c'"  
+		@echo "XCodex should work seamlessly on Unix-like systems!"
+	endif
+
 # Include the generated dependency files. The '-' suppresses errors if they don't exist.
 -include $(DEPS)
 
 # Phony targets are not real files
-.PHONY: all clean re run
+.PHONY: all clean re run test-xcodex

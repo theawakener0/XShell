@@ -8,7 +8,9 @@
 #define XCODEX_MODE_NORMAL     0  /* Navigate and execute commands */
 #define XCODEX_MODE_INSERT     1  /* Insert text */
 #define XCODEX_MODE_VISUAL     2  /* Select text */
-#define XCODEX_MODE_COMMAND    3  /* Execute commands */
+#define XCODEX_MODE_VISUAL_LINE 3  /* Select lines */
+#define XCODEX_MODE_VISUAL_BLOCK 4  /* Select blocks */
+#define XCODEX_MODE_COMMAND    5  /* Execute commands */
 
 /* Motion Types for consistent movement */
 #define XCODEX_MOTION_CHAR     0  /* Character-wise movement */
@@ -24,15 +26,53 @@
 #define XCODEX_KEY_CTRL_F      6
 #define XCODEX_KEY_CTRL_B      2
 
-/* POSIX-only feature */
-#if !defined(_WIN32) && !defined(_WIN64)
-#define XCODEX_ENABLED 1
-
-#ifdef __linux__
-#define _POSIX_C_SOURCE 200809L
+/* Platform detection */
+#if defined(_WIN32) || defined(_WIN64)
+    #define XCODEX_WINDOWS 1
+    #define XCODEX_POSIX 0
+#elif defined(__unix__) || defined(__unix) || (defined(__APPLE__) && defined(__MACH__))
+    #define XCODEX_POSIX 1
+    #define XCODEX_WINDOWS 0
+#else
+    #define XCODEX_POSIX 0
+    #define XCODEX_WINDOWS 0
 #endif
 
-#include <termios.h>
+/* Platform-specific includes */
+#if XCODEX_WINDOWS
+    #include <windows.h>
+    #include <conio.h>
+    #include <io.h>
+    #include <fcntl.h>
+    #define STDIN_FILENO 0
+    #define STDOUT_FILENO 1
+    #define STDERR_FILENO 2
+    /* Define types that Windows doesn't have */
+    #ifndef _SSIZE_T_DEFINED
+    typedef long long ssize_t;
+    #define _SSIZE_T_DEFINED
+    #endif
+#endif
+
+#if XCODEX_POSIX
+    #ifdef __linux__
+    #define _POSIX_C_SOURCE 200809L
+    #define _GNU_SOURCE
+    #endif
+    #ifdef __APPLE__
+    #define _DARWIN_C_SOURCE
+    #endif
+    #ifndef _DEFAULT_SOURCE
+    #define _DEFAULT_SOURCE
+    #endif
+    #include <termios.h>
+    #include <sys/ioctl.h>
+    #include <sys/time.h>
+    #include <unistd.h>
+    #include <signal.h>
+#endif
+
+/* Common includes */
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -41,230 +81,97 @@
 #include <ctype.h>
 #include <time.h>
 #include <sys/types.h>
-#include <sys/ioctl.h>
-#include <sys/time.h>
-#include <unistd.h>
 #include <stdarg.h>
 #include <fcntl.h>
-#include <signal.h>
+#include "syntax.h"
+#include "themes.h"
 
-/* Syntax highlight types */
-#define HL_NORMAL 0
-#define HL_NONPRINT 1
-#define HL_COMMENT 2   /* Single line comment. */
-#define HL_MLCOMMENT 3 /* Multi-line comment. */
-#define HL_KEYWORD1 4
-#define HL_KEYWORD2 5
-#define HL_KEYWORD3 6
-#define HL_STRING 7
-#define HL_NUMBER 8
-#define HL_MATCH 9     /* Search match. */
-#define HL_FUNCTION 10
-#define HL_OPERATOR 11
-#define HL_PREPROCESSOR 12
-#define HL_BRACKET 13
-#define HL_CONSTANT 14
-#define HL_VARIABLE 15
-#define HL_ERROR 16 /* Error in syntax highlight. */
+#define XCODEX_ENABLED 1
 
-#define HL_HIGHLIGHT_STRINGS (1<<0)
-#define HL_HIGHLIGHT_NUMBERS (1<<1)
+/* Cross-platform write function */
+#if XCODEX_WINDOWS
+int xcodex_write(int fd, const void *buf, size_t count) {
+    DWORD written;
+    HANDLE handle = (fd == STDOUT_FILENO) ? GetStdHandle(STD_OUTPUT_HANDLE) : GetStdHandle(STD_ERROR_HANDLE);
+    if (handle == INVALID_HANDLE_VALUE) return -1;
+    if (!WriteConsoleA(handle, buf, count, &written, NULL)) return -1;
+    return written;
+}
+#else
+#define xcodex_write(fd, buf, count) write(fd, buf, count)
+#endif
 
-struct editorSyntax {
-    char **filematch;
-    char **keywords;
-    char singleline_comment_start[3];
-    char multiline_comment_start[8];
-    char multiline_comment_end[8];
-    int flags;
-};
-
-/* Theme definitions */
-typedef struct {
-    char *name;
-    int colors[17];  /* Colors for each highlight type */
-    int bg_color;
-    int cursor_color;
-    int status_bg;
-    int status_fg;
-    int line_number_color; /* Color for line numbers */
-    int cursor_line_color; /* Color for current line highlighting */
-} theme_t;
-
-/* Neovim-inspired themes */
-theme_t themes[] = {
-    {
-        "xcodex_dark",
-        {
-            37,  /* HL_NORMAL - light grey */
-            90,  /* HL_NONPRINT - dark grey */
-            244, /* HL_COMMENT - grey */
-            244, /* HL_MLCOMMENT - grey */
-            207, /* HL_KEYWORD1 - magenta */
-            108, /* HL_KEYWORD2 - green */
-            81,  /* HL_KEYWORD3 - cyan */
-            114, /* HL_STRING - light green */
-            209, /* HL_NUMBER - orange */
-            220, /* HL_MATCH - yellow */
-            81,  /* HL_FUNCTION - cyan */
-            204, /* HL_OPERATOR - red */
-            175, /* HL_PREPROCESSOR - purple */
-            248, /* HL_BRACKET - white */
-            209, /* HL_CONSTANT - orange */
-            146, /* HL_VARIABLE - light purple */
-            196  /* HL_ERROR - bright red */
-        },
-        0,   /* bg_color */
-        15,  /* cursor_color */
-        236, /* status_bg */
-        248, /* status_fg */
-        240, /* line_number_color - dark grey */
-        236  /* cursor_line_color - dark background for current line */
-    },
-    {
-        "xcodex_light",
-        {
-            16,  /* HL_NORMAL - black */
-            240, /* HL_NONPRINT - dark grey */
-            102, /* HL_COMMENT - blue grey */
-            102, /* HL_MLCOMMENT - blue grey */
-            127, /* HL_KEYWORD1 - purple */
-            28,  /* HL_KEYWORD2 - dark green */
-            30,  /* HL_KEYWORD3 - dark cyan */
-            22,  /* HL_STRING - dark green */
-            166, /* HL_NUMBER - orange */
-            220, /* HL_MATCH - yellow */
-            30,  /* HL_FUNCTION - dark cyan */
-            124, /* HL_OPERATOR - dark red */
-            90,  /* HL_PREPROCESSOR - purple */
-            16,  /* HL_BRACKET - black */
-            166, /* HL_CONSTANT - orange */
-            55,  /* HL_VARIABLE - purple */
-            196  /* HL_ERROR - red */
-        },
-        15,  /* bg_color */
-        0,   /* cursor_color */
-        252, /* status_bg */
-        16,  /* status_fg */
-        102, /* line_number_color - blue grey */
-        254  /* cursor_line_color - light grey for current line */
-    },
-    {
-        "gruvbox_dark",
-        {
-            223, /* HL_NORMAL - light cream */
-            245, /* HL_NONPRINT - grey */
-            245, /* HL_COMMENT - grey */
-            245, /* HL_MLCOMMENT - grey */
-            167, /* HL_KEYWORD1 - red */
-            142, /* HL_KEYWORD2 - green */
-            108, /* HL_KEYWORD3 - blue */
-            214, /* HL_STRING - yellow */
-            208, /* HL_NUMBER - orange */
-            172, /* HL_MATCH - orange */
-            108, /* HL_FUNCTION - blue */
-            208, /* HL_OPERATOR - orange */
-            175, /* HL_PREPROCESSOR - purple */
-            223, /* HL_BRACKET - cream */
-            208, /* HL_CONSTANT - orange */
-            142, /* HL_VARIABLE - green */
-            167  /* HL_ERROR - red */
-        },
-        235, /* bg_color */
-        223, /* cursor_color */
-        237, /* status_bg */
-        223, /* status_fg */
-        245, /* line_number_color - grey */
-        237  /* cursor_line_color - slightly lighter dark */
-    },
-    {
-        "tokyo_night_dark",
-        {
-            169, /* HL_NORMAL - light purple/blue */
-            241, /* HL_NONPRINT - dark grey */
-            102, /* HL_COMMENT - blue grey */
-            102, /* HL_MLCOMMENT - blue grey */
-            175, /* HL_KEYWORD1 - light purple */
-            150, /* HL_KEYWORD2 - light green */
-            110, /* HL_KEYWORD3 - blue */
-            158, /* HL_STRING - light green */
-            215, /* HL_NUMBER - orange */
-            220, /* HL_MATCH - yellow */
-            110, /* HL_FUNCTION - blue */
-            204, /* HL_OPERATOR - red */
-            176, /* HL_PREPROCESSOR - purple */
-            248, /* HL_BRACKET - white */
-            215, /* HL_CONSTANT - orange */
-            176, /* HL_VARIABLE - purple */
-            203  /* HL_ERROR - red */
-        },
-        234, /* bg_color - dark blue */
-        169, /* cursor_color */
-        235, /* status_bg */
-        169, /* status_fg */
-        102, /* line_number_color - blue grey */
-        235  /* cursor_line_color - slightly lighter blue */
-    },
-    {
-        "tokyo_night_light",
-        {
-            52,  /* HL_NORMAL - dark purple */
-            241, /* HL_NONPRINT - grey */
-            102, /* HL_COMMENT - blue grey */
-            102, /* HL_MLCOMMENT - blue grey */
-            90,  /* HL_KEYWORD1 - purple */
-            29,  /* HL_KEYWORD2 - dark green */
-            24,  /* HL_KEYWORD3 - dark blue */
-            28,  /* HL_STRING - dark green */
-            166, /* HL_NUMBER - orange */
-            220, /* HL_MATCH - yellow */
-            24,  /* HL_FUNCTION - dark blue */
-            124, /* HL_OPERATOR - dark red */
-            90,  /* HL_PREPROCESSOR - purple */
-            52,  /* HL_BRACKET - dark purple */
-            166, /* HL_CONSTANT - orange */
-            90,  /* HL_VARIABLE - purple */
-            196  /* HL_ERROR - red */
-        },
-        255, /* bg_color - white */
-        52,  /* cursor_color */
-        252, /* status_bg */
-        52,  /* status_fg */
-        102, /* line_number_color - blue grey */
-        253  /* cursor_line_color - very light grey */
-    },
-    {
-        "tokyo_night_storm",
-        {
-            188, /* HL_NORMAL - light grey */
-            241, /* HL_NONPRINT - dark grey */
-            102, /* HL_COMMENT - blue grey */
-            102, /* HL_MLCOMMENT - blue grey */
-            141, /* HL_KEYWORD1 - light purple */
-            114, /* HL_KEYWORD2 - green */
-            74,  /* HL_KEYWORD3 - blue */
-            143, /* HL_STRING - light green */
-            215, /* HL_NUMBER - orange */
-            220, /* HL_MATCH - yellow */
-            74,  /* HL_FUNCTION - blue */
-            203, /* HL_OPERATOR - red */
-            141, /* HL_PREPROCESSOR - purple */
-            188, /* HL_BRACKET - light grey */
-            215, /* HL_CONSTANT - orange */
-            141, /* HL_VARIABLE - purple */
-            203  /* HL_ERROR - red */
-        },
-        236, /* bg_color - storm dark */
-        188, /* cursor_color */
-        237, /* status_bg */
-        188, /* status_fg */
-        102, /* line_number_color - blue grey */
-        235  /* cursor_line_color - dark grey */
+/* Windows compatibility functions */
+#if XCODEX_WINDOWS
+ssize_t getline(char **lineptr, size_t *n, FILE *stream) {
+    if (!lineptr || !n || !stream) {
+        errno = EINVAL;
+        return -1;
     }
-};
+    
+    if (*lineptr == NULL) {
+        *n = 128;
+        *lineptr = malloc(*n);
+        if (!*lineptr) {
+            errno = ENOMEM;
+            return -1;
+        }
+    }
+    
+    ssize_t pos = 0;
+    int c;
+    
+    while ((c = fgetc(stream)) != EOF) {
+        if (pos + 1 >= *n) {
+            *n *= 2;
+            char *tmp = realloc(*lineptr, *n);
+            if (!tmp) {
+                errno = ENOMEM;
+                return -1;
+            }
+            *lineptr = tmp;
+        }
+        
+        (*lineptr)[pos++] = c;
+        if (c == '\n') break;
+    }
+    
+    if (pos == 0 && c == EOF) {
+        return -1;
+    }
+    
+    (*lineptr)[pos] = '\0';
+    return pos;
+}
 
+/* Windows doesn't have ftruncate, so we implement it */
+int ftruncate(int fd, off_t length) {
+    HANDLE handle = (HANDLE)_get_osfhandle(fd);
+    if (handle == INVALID_HANDLE_VALUE) {
+        errno = EBADF;
+        return -1;
+    }
+    
+    LARGE_INTEGER li;
+    li.QuadPart = length;
+    
+    if (!SetFilePointerEx(handle, li, NULL, FILE_BEGIN)) {
+        errno = EINVAL;
+        return -1;
+    }
+    
+    if (!SetEndOfFile(handle)) {
+        errno = EINVAL;
+        return -1;
+    }
+    
+    return 0;
+}
+#endif
+
+/* ============================ XCodex Global Variables ============================ */
+/* Current theme index, used for syntax highlighting and UI colors */
 static int current_theme = 0;
-#define NUM_THEMES (sizeof(themes) / sizeof(themes[0]))
 
 /* Forward declarations */
 void editorSetStatusMessage(const char *fmt, ...);
@@ -276,6 +183,8 @@ void editorInsertChar(int c);
 int editorSave(void);
 void editorFind(int fd);
 void xcodex_execute_command(char *command);
+void editorInsertRow(int at, char *s, size_t len);
+void editorDelRow(int at);
 
 /* This structure represents a single line of the file we are editing. */
 typedef struct erow {
@@ -291,10 +200,45 @@ typedef struct erow {
 
 /* Forward declarations that need erow */
 void editorRowDelChar(erow *row, int at);
+void editorUpdateRow(erow *row);
+void editorRowInsertChar(erow *row, int at, int c);
+void editorRowAppendString(erow *row, char *s, size_t len);
+
+/* Undo system forward declarations */
+void xcodex_init_undo_system(void);
+void xcodex_free_undo_system(void);
+void xcodex_push_undo(int type, int row, int col, const char *data, int data_len);
+void xcodex_start_undo_group(void);
+void xcodex_clear_undo_stack(void);
+void xcodex_undo(void);
+void handleSigWinCh(void);
+int xcodex_can_undo(void);
 
 typedef struct hlcolor {
     int r,g,b;
 } hlcolor;
+
+/* ============================ XCodex Undo System ============================ */
+#define UNDO_INSERT_CHAR    1
+#define UNDO_DELETE_CHAR    2
+#define UNDO_INSERT_LINE    3
+#define UNDO_DELETE_LINE    4
+#define UNDO_SPLIT_LINE     5
+#define UNDO_JOIN_LINE      6
+#define UNDO_REPLACE_TEXT   7
+
+#define UNDO_STACK_SIZE     100
+
+struct undoEntry {
+    int type;           /* Type of operation */
+    int row;            /* Row number */
+    int col;            /* Column number */
+    char *data;         /* Data associated with operation */
+    int data_len;       /* Length of data */
+    int group_id;       /* Group ID for grouping related operations */
+    int cursor_row;     /* Cursor position before operation */
+    int cursor_col;     /* Cursor position before operation */
+};
 
 struct editorConfig {
     int cx,cy;  /* Cursor x and y position in characters */
@@ -322,9 +266,22 @@ struct editorConfig {
     int visual_start_col;        /* Visual selection start column */
     int visual_end_row;          /* Visual selection end row */
     int visual_end_col;          /* Visual selection end column */
+    int visual_line_mode;        /* 1 for line-wise, 0 for character-wise */
     char last_search[256];       /* Last search pattern */
     int search_direction;        /* 1 for forward, -1 for backward */
     int quit_requested;          /* Flag to signal quit request */
+    
+    /* ============================ XCodex Yank/Clipboard System ============================ */
+    char *yank_buffer;           /* Yank buffer for copy/paste operations */
+    int yank_buffer_size;        /* Size of yank buffer */
+    int yank_is_line_mode;       /* 1 if yanked text is line-wise, 0 if character-wise */
+    
+    /* ============================ XCodex Undo System ============================ */
+    struct undoEntry *undo_stack;  /* Stack of undo entries */
+    int undo_count;                /* Number of undo entries */
+    int undo_capacity;             /* Capacity of undo stack */
+    int undo_group_id;             /* Current undo group ID */
+    int xcodex_undo_in_progress; /* Flag to indicate if undo is in progress */
 };
 
 static struct editorConfig E;
@@ -405,11 +362,13 @@ void editorToggleLineNumbers(void) {
 /* Get human-readable mode name for status display */
 const char* xcodex_get_mode_name(int mode) {
     switch (mode) {
-        case XCODEX_MODE_NORMAL:  return "NORMAL";
-        case XCODEX_MODE_INSERT:  return "INSERT";
-        case XCODEX_MODE_VISUAL:  return "VISUAL";
-        case XCODEX_MODE_COMMAND: return "COMMAND";
-        default:                  return "UNKNOWN";
+        case XCODEX_MODE_NORMAL:      return "NORMAL";
+        case XCODEX_MODE_INSERT:      return "INSERT";
+        case XCODEX_MODE_VISUAL:      return "VISUAL";
+        case XCODEX_MODE_VISUAL_LINE: return "VISUAL LINE";
+        case XCODEX_MODE_VISUAL_BLOCK: return "VISUAL BLOCK";
+        case XCODEX_MODE_COMMAND:     return "COMMAND";
+        default:                      return "UNKNOWN";
     }
 }
 
@@ -425,6 +384,15 @@ void xcodex_set_mode(int new_mode) {
     E.motion_count = 0;
     E.command_len = 0;
     E.command_buffer[0] = '\0';
+    
+    /* Handle undo groups for mode transitions */
+    if (old_mode == XCODEX_MODE_INSERT && new_mode != XCODEX_MODE_INSERT) {
+        /* Exiting insert mode - end undo group */
+        xcodex_start_undo_group();
+    } else if (old_mode != XCODEX_MODE_INSERT && new_mode == XCODEX_MODE_INSERT) {
+        /* Entering insert mode - start new undo group */
+        xcodex_start_undo_group();
+    }
     
     /* Mode-specific initialization */
     switch (new_mode) {
@@ -452,6 +420,27 @@ void xcodex_set_mode(int new_mode) {
             E.visual_start_col = E.cx;
             E.visual_end_row = E.cy;
             E.visual_end_col = E.cx;
+            E.visual_line_mode = 0;  /* Character-wise by default */
+            editorSetStatusMessage("-- %s --", xcodex_get_mode_name(new_mode));
+            break;
+            
+        case XCODEX_MODE_VISUAL_LINE:
+            /* Initialize visual line selection */
+            E.visual_start_row = E.cy;
+            E.visual_start_col = 0;  /* Start of line */
+            E.visual_end_row = E.cy;
+            E.visual_end_col = -1;   /* End of line marker */
+            E.visual_line_mode = 1;  /* Line-wise mode */
+            editorSetStatusMessage("-- %s --", xcodex_get_mode_name(new_mode));
+            break;
+            
+        case XCODEX_MODE_VISUAL_BLOCK:
+            /* Initialize visual block selection */
+            E.visual_start_row = E.cy;
+            E.visual_start_col = E.cx;
+            E.visual_end_row = E.cy;
+            E.visual_end_col = E.cx;
+            E.visual_line_mode = 0;  /* Character-wise by default */
             editorSetStatusMessage("-- %s --", xcodex_get_mode_name(new_mode));
             break;
             
@@ -474,9 +463,15 @@ void xcodex_init_modal_system(void) {
     E.visual_start_col = 0;
     E.visual_end_row = 0;
     E.visual_end_col = 0;
+    E.visual_line_mode = 0;
     E.last_search[0] = '\0';
     E.search_direction = 1;
     E.quit_requested = 0;
+    
+    /* Initialize yank buffer */
+    E.yank_buffer = NULL;
+    E.yank_buffer_size = 0;
+    E.yank_is_line_mode = 0;
 }
 
 /* ============================ XCodex Motion Functions ============================ */
@@ -658,20 +653,830 @@ void xcodex_go_to_last_line(void) {
     }
 }
 
+/* ============================ XCodex Yank/Clipboard System ============================ */
+
+/* Free the yank buffer */
+void xcodex_free_yank_buffer(void) {
+    if (E.yank_buffer) {
+        free(E.yank_buffer);
+        E.yank_buffer = NULL;
+        E.yank_buffer_size = 0;
+    }
+}
+
+/* Store text in yank buffer */
+void xcodex_yank_text(const char *text, int size, int is_line_mode) {
+    xcodex_free_yank_buffer();
+    
+    if (text && size > 0) {
+        E.yank_buffer = malloc(size + 1);
+        if (E.yank_buffer) {
+            memcpy(E.yank_buffer, text, size);
+            E.yank_buffer[size] = '\0';
+            E.yank_buffer_size = size;
+            E.yank_is_line_mode = is_line_mode;
+        }
+    }
+}
+
+/* Get selected text from visual selection */
+char *xcodex_get_selected_text(int *size, int *is_line_mode) {
+    if (E.mode != XCODEX_MODE_VISUAL && E.mode != XCODEX_MODE_VISUAL_LINE && E.mode != XCODEX_MODE_VISUAL_BLOCK) {
+        *size = 0;
+        return NULL;
+    }
+    
+    /* Convert screen coordinates to file coordinates */
+    int start_row = E.rowoff + E.visual_start_row;
+    int start_col = E.coloff + E.visual_start_col;
+    int end_row = E.rowoff + E.visual_end_row;
+    int end_col = E.coloff + E.visual_end_col;
+    
+    /* Normalize selection (start should be before end) */
+    if (start_row > end_row || (start_row == end_row && start_col > end_col)) {
+        int temp = start_row;
+        start_row = end_row;
+        end_row = temp;
+        temp = start_col;
+        start_col = end_col;
+        end_col = temp;
+    }
+    
+    /* Validate bounds */
+    if (start_row < 0) start_row = 0;
+    if (end_row >= E.numrows) end_row = E.numrows - 1;
+    if (start_row > end_row) {
+        *size = 0;
+        return NULL;
+    }
+    
+    *is_line_mode = (E.mode == XCODEX_MODE_VISUAL_LINE);
+    
+    /* Calculate total size needed */
+    int total_size = 0;
+    for (int row = start_row; row <= end_row; row++) {
+        if (row >= E.numrows) break;
+        
+        erow *r = &E.row[row];
+        if (E.mode == XCODEX_MODE_VISUAL_LINE) {
+            /* Include entire line */
+            total_size += r->size + 1; /* +1 for newline */
+        } else if (E.mode == XCODEX_MODE_VISUAL_BLOCK) {
+            /* Block-wise selection */
+            int start_pos = start_col;
+            int end_pos = end_col;
+            
+            if (start_pos < 0) start_pos = 0;
+            if (end_pos >= r->size) end_pos = r->size - 1;
+            
+            if (start_pos <= end_pos) {
+                total_size += (end_pos - start_pos + 1);
+                if (row < end_row) total_size++; /* +1 for newline */
+            }
+        } else {
+            /* Character-wise selection */
+            int start_pos = (row == start_row) ? start_col : 0;
+            int end_pos = (row == end_row) ? end_col : r->size - 1;
+            
+            if (start_pos < 0) start_pos = 0;
+            if (end_pos >= r->size) end_pos = r->size - 1;
+            
+            if (start_pos <= end_pos) {
+                total_size += (end_pos - start_pos + 1);
+                if (row < end_row) total_size++; /* +1 for newline */
+            }
+        }
+    }
+    
+    if (total_size == 0) {
+        *size = 0;
+        return NULL;
+    }
+    
+    /* Allocate buffer */
+    char *buffer = malloc(total_size + 1);
+    if (!buffer) {
+        *size = 0;
+        return NULL;
+    }
+    
+    /* Copy selected text */
+    int pos = 0;
+    for (int row = start_row; row <= end_row; row++) {
+        if (row >= E.numrows) break;
+        
+        erow *r = &E.row[row];
+        if (E.mode == XCODEX_MODE_VISUAL_LINE) {
+            /* Include entire line */
+            memcpy(buffer + pos, r->chars, r->size);
+            pos += r->size;
+            buffer[pos++] = '\n';
+        } else if (E.mode == XCODEX_MODE_VISUAL_BLOCK) {
+            /* Block-wise selection */
+            int start_pos = start_col;
+            int end_pos = end_col;
+            
+            if (start_pos < 0) start_pos = 0;
+            if (end_pos >= r->size) end_pos = r->size - 1;
+            
+            if (start_pos <= end_pos) {
+                int copy_len = end_pos - start_pos + 1;
+                memcpy(buffer + pos, r->chars + start_pos, copy_len);
+                pos += copy_len;
+                if (row < end_row) {
+                    buffer[pos++] = '\n';
+                }
+            }
+        } else {
+            /* Character-wise selection */
+            int start_pos = (row == start_row) ? start_col : 0;
+            int end_pos = (row == end_row) ? end_col : r->size - 1;
+            
+            if (start_pos < 0) start_pos = 0;
+            if (end_pos >= r->size) end_pos = r->size - 1;
+            
+            if (start_pos <= end_pos) {
+                int copy_len = end_pos - start_pos + 1;
+                memcpy(buffer + pos, r->chars + start_pos, copy_len);
+                pos += copy_len;
+                if (row < end_row) {
+                    buffer[pos++] = '\n';
+                }
+            }
+        }
+    }
+    
+    buffer[pos] = '\0';
+    *size = pos;
+    return buffer;
+}
+
+/* Delete selected text */
+void xcodex_delete_selected_text(void) {
+    if (E.mode != XCODEX_MODE_VISUAL && E.mode != XCODEX_MODE_VISUAL_LINE && E.mode != XCODEX_MODE_VISUAL_BLOCK) {
+        return;
+    }
+    
+    /* Start new undo group for the deletion operation */
+    xcodex_start_undo_group();
+    
+    /* Convert screen coordinates to file coordinates */
+    int start_row = E.rowoff + E.visual_start_row;
+    int start_col = E.coloff + E.visual_start_col;
+    int end_row = E.rowoff + E.visual_end_row;
+    int end_col = E.coloff + E.visual_end_col;
+    
+    /* Normalize selection (start should be before end) */
+    if (start_row > end_row || (start_row == end_row && start_col > end_col)) {
+        int temp = start_row;
+        start_row = end_row;
+        end_row = temp;
+        temp = start_col;
+        start_col = end_col;
+        end_col = temp;
+    }
+    
+    /* Validate bounds */
+    if (start_row < 0) start_row = 0;
+    if (end_row >= E.numrows) end_row = E.numrows - 1;
+    if (start_row > end_row || start_row >= E.numrows) return;  /* Nothing to delete */
+    
+    if (E.mode == XCODEX_MODE_VISUAL_LINE) {
+        /* Delete entire lines */
+        for (int row = end_row; row >= start_row; row--) {
+            if (row >= 0 && row < E.numrows) {  /* Bounds check */
+                editorDelRow(row);
+            }
+        }
+        
+        /* Position cursor at start of selection - with bounds checking */
+        if (start_row < E.numrows) {
+            E.cy = start_row - E.rowoff;
+            if (E.cy < 0) {
+                E.rowoff = start_row;
+                E.cy = 0;
+            }
+        }
+        E.cx = 0;
+        E.coloff = 0;
+    } else {
+        /* Character-wise or block-wise deletion */
+        if (start_row == end_row) {
+            /* Single line deletion */
+            if (start_row >= 0 && start_row < E.numrows) {
+                erow *row = &E.row[start_row];
+                if (start_col >= 0 && start_col < row->size && end_col >= 0 && end_col < row->size && start_col <= end_col) {
+                    int delete_len = end_col - start_col + 1;
+                    if (delete_len > 0 && start_col + delete_len <= row->size) {
+                        memmove(row->chars + start_col, 
+                                row->chars + start_col + delete_len,
+                                row->size - start_col - delete_len);
+                        row->size -= delete_len;
+                        row->chars[row->size] = '\0';
+                        editorUpdateRow(row);
+                    }
+                }
+            }
+        } else {
+            /* Multi-line deletion - simplified and safer */
+            for (int row = end_row; row >= start_row; row--) {
+                if (row >= 0 && row < E.numrows) {
+                    if (row == start_row && row == end_row) {
+                        /* Single line case handled above */
+                    } else if (row == start_row) {
+                        /* First line - delete from start_col to end */
+                        erow *row_ptr = &E.row[row];
+                        if (start_col >= 0 && start_col < row_ptr->size) {
+                            row_ptr->size = start_col;
+                            row_ptr->chars[row_ptr->size] = '\0';
+                            editorUpdateRow(row_ptr);
+                        }
+                    } else if (row == end_row) {
+                        /* Last line - delete from beginning to end_col */
+                        erow *row_ptr = &E.row[row];
+                        if (end_col >= 0 && end_col < row_ptr->size) {
+                            int remaining = row_ptr->size - end_col - 1;
+                            if (remaining > 0) {
+                                memmove(row_ptr->chars, row_ptr->chars + end_col + 1, remaining);
+                                row_ptr->size = remaining;
+                                row_ptr->chars[row_ptr->size] = '\0';
+                                editorUpdateRow(row_ptr);
+                            } else {
+                                row_ptr->size = 0;
+                                row_ptr->chars[0] = '\0';
+                                editorUpdateRow(row_ptr);
+                            }
+                        }
+                    } else {
+                        /* Middle lines - delete entire line */
+                        editorDelRow(row);
+                    }
+                }
+            }
+            
+            /* Merge first and last lines if they exist */
+            if (start_row < E.numrows && start_row + 1 < E.numrows) {
+                erow *first_row = &E.row[start_row];
+                erow *second_row = &E.row[start_row + 1];
+                editorRowAppendString(first_row, second_row->chars, second_row->size);
+                editorDelRow(start_row + 1);
+            }
+        }
+        
+        /* Position cursor at start of selection - with bounds checking */
+        E.cy = start_row - E.rowoff;
+        if (E.cy < 0) {
+            E.rowoff = start_row;
+            E.cy = 0;
+        }
+        E.cx = start_col - E.coloff;
+        if (E.cx < 0) {
+            E.coloff = start_col;
+            E.cx = 0;
+        }
+    }
+    
+    /* Ensure cursor is within bounds */
+    if (E.cy >= E.screenrows) E.cy = E.screenrows - 1;
+    if (E.cx >= E.screencols - E.line_numbers_width) E.cx = E.screencols - E.line_numbers_width - 1;
+    
+    E.dirty++;
+}
+
+/* Paste text from yank buffer */
+void xcodex_paste_text(void) {
+    if (!E.yank_buffer || E.yank_buffer_size == 0) {
+        editorSetStatusMessage("Nothing to paste");
+        return;
+    }
+    
+    int filerow = E.rowoff + E.cy;
+    int filecol = E.coloff + E.cx;
+    
+    if (E.yank_is_line_mode) {
+        /* Line-wise paste - insert after current line */
+        int paste_row = filerow + 1;
+        
+        /* Split buffer into lines and insert each */
+        char *text = E.yank_buffer;
+        int pos = 0;
+        
+        while (pos < E.yank_buffer_size) {
+            int line_end = pos;
+            while (line_end < E.yank_buffer_size && text[line_end] != '\n') {
+                line_end++;
+            }
+            
+            int line_len = line_end - pos;
+            if (line_len > 0) {
+                editorInsertRow(paste_row, text + pos, line_len);
+                paste_row++;
+            }
+            
+            pos = line_end + 1; /* Skip newline */
+        }
+        
+        /* Move cursor to first pasted line */
+        E.cy++;
+        E.cx = 0;
+        E.coloff = 0;
+        
+        if (E.cy >= E.screenrows) {
+            E.rowoff++;
+            E.cy = E.screenrows - 1;
+        }
+    } else {
+        /* Character-wise paste */
+        char *text = E.yank_buffer;
+        int pos = 0;
+        
+        while (pos < E.yank_buffer_size) {
+            if (text[pos] == '\n') {
+                editorInsertNewline();
+                pos++;
+            } else {
+                editorInsertChar(text[pos]);
+                pos++;
+            }
+        }
+    }
+    
+    editorSetStatusMessage("Pasted %d bytes", E.yank_buffer_size);
+}
+
+/* Delete current line */
+void xcodex_delete_current_line(void) {
+    int filerow = E.rowoff + E.cy;
+    
+    if (filerow < 0 || filerow >= E.numrows) {
+        editorSetStatusMessage("No line to delete");
+        return;
+    }
+    
+    /* Get the current line content for yank buffer */
+    erow *row = &E.row[filerow];
+    char *line_content = malloc(row->size + 2); /* +2 for newline and null terminator */
+    if (line_content) {
+        memcpy(line_content, row->chars, row->size);
+        line_content[row->size] = '\n';
+        line_content[row->size + 1] = '\0';
+        
+        /* Yank the line */
+        xcodex_yank_text(line_content, row->size + 1, 1); /* 1 = line mode */
+        free(line_content);
+    }
+    
+    /* Delete the line */
+    editorDelRow(filerow);
+    
+    /* Adjust cursor position */
+    if (E.numrows == 0) {
+        /* No lines left, create an empty line */
+        editorInsertRow(0, "", 0);
+        E.cy = 0;
+        E.cx = 0;
+        E.coloff = 0;
+        E.rowoff = 0;
+    } else {
+        /* If we deleted the last line, move cursor up */
+        if (filerow >= E.numrows) {
+            if (E.cy > 0) {
+                E.cy--;
+            } else if (E.rowoff > 0) {
+                E.rowoff--;
+            }
+        }
+        
+        /* Make sure cursor is at the beginning of the line */
+        E.cx = 0;
+        E.coloff = 0;
+    }
+    
+    editorSetStatusMessage("Deleted line");
+}
+
+/* ============================ XCodex Undo System ============================ */
+
+/* Initialize the undo system */
+void xcodex_init_undo_system(void) {
+    E.undo_stack = malloc(sizeof(struct undoEntry) * UNDO_STACK_SIZE);
+    if (!E.undo_stack) {
+        fprintf(stderr, "Failed to allocate undo stack\n");
+        exit(1);
+    }
+    
+    /* Initialize all entries to safe values */
+    for (int i = 0; i < UNDO_STACK_SIZE; i++) {
+        E.undo_stack[i].type = 0;
+        E.undo_stack[i].row = 0;
+        E.undo_stack[i].col = 0;
+        E.undo_stack[i].data = NULL;
+        E.undo_stack[i].data_len = 0;
+        E.undo_stack[i].group_id = 0;
+        E.undo_stack[i].cursor_row = 0;
+        E.undo_stack[i].cursor_col = 0;
+    }
+    
+    E.undo_count = 0;
+    E.undo_capacity = UNDO_STACK_SIZE;
+    E.undo_group_id = 0;
+    E.xcodex_undo_in_progress = 0;
+}
+
+/* Free the undo system */
+void xcodex_free_undo_system(void) {
+    if (E.undo_stack) {
+        /* Free all data in undo entries */
+        for (int i = 0; i < E.undo_count; i++) {
+            if (E.undo_stack[i].data) {
+                free(E.undo_stack[i].data);
+                E.undo_stack[i].data = NULL;
+            }
+        }
+        free(E.undo_stack);
+        E.undo_stack = NULL;
+    }
+    E.undo_count = 0;
+    E.undo_capacity = 0;
+    E.xcodex_undo_in_progress = 0;
+}
+
+/* Start a new undo group for related operations */
+void xcodex_start_undo_group(void) {
+    E.undo_group_id++;
+}
+
+/* Push an undo entry onto the stack */
+void xcodex_push_undo(int type, int row, int col, const char *data, int data_len) {
+    /* Don't push undo entries if an undo operation is in progress */
+    if (E.xcodex_undo_in_progress) {
+        return;
+    }
+    
+    if (!E.undo_stack || E.undo_count >= E.undo_capacity) {
+        return; /* Stack full or not initialized */
+    }
+    
+    /* If stack is nearly full, remove oldest entries */
+    if (E.undo_count >= UNDO_STACK_SIZE - 1) {
+        /* Free the oldest entry */
+        if (E.undo_stack[0].data) {
+            free(E.undo_stack[0].data);
+        }
+        
+        /* Shift all entries forward */
+        for (int i = 0; i < E.undo_count - 1; i++) {
+            E.undo_stack[i] = E.undo_stack[i + 1];
+        }
+        E.undo_count--;
+    }
+    
+    struct undoEntry *entry = &E.undo_stack[E.undo_count];
+    entry->type = type;
+    entry->row = row;
+    entry->col = col;
+    entry->group_id = E.undo_group_id;
+    
+    /* Save cursor position with bounds checking */
+    int cursor_row = E.rowoff + E.cy;
+    int cursor_col = E.coloff + E.cx;
+    
+    /* Validate cursor position */
+    if (cursor_row < 0) cursor_row = 0;
+    if (cursor_row >= E.numrows) cursor_row = E.numrows > 0 ? E.numrows - 1 : 0;
+    if (cursor_col < 0) cursor_col = 0;
+    
+    entry->cursor_row = cursor_row;
+    entry->cursor_col = cursor_col;
+    
+    /* Copy data if provided */
+    if (data && data_len > 0) {
+        entry->data = malloc(data_len + 1);
+        if (entry->data) {
+            memcpy(entry->data, data, data_len);
+            entry->data[data_len] = '\0';
+            entry->data_len = data_len;
+        } else {
+            /* Memory allocation failed - don't add this entry */
+            return;
+        }
+    } else {
+        entry->data = NULL;
+        entry->data_len = 0;
+    }
+    
+    E.undo_count++;
+}
+
+/* Clear the undo stack */
+void xcodex_clear_undo_stack(void) {
+    if (E.undo_stack) {
+        /* Free all data in undo entries */
+        for (int i = 0; i < E.undo_count; i++) {
+            if (E.undo_stack[i].data) {
+                free(E.undo_stack[i].data);
+                E.undo_stack[i].data = NULL;
+            }
+        }
+        E.undo_count = 0;
+        E.undo_group_id = 0;
+    }
+}
+
+/* Check if undo is possible */
+int xcodex_can_undo(void) {
+    return E.undo_count > 0 && !E.xcodex_undo_in_progress;
+}
+
+
+/* Perform undo operation */
+void xcodex_undo(void) {
+    if (E.undo_count == 0) {
+        editorSetStatusMessage("Nothing to undo");
+        return;
+    }
+    
+    /* Prevent recursive undo operations */
+    if (E.xcodex_undo_in_progress) {
+        editorSetStatusMessage("Undo operation already in progress");
+        return;
+    }
+    
+    /* Set the flag to prevent recursion */
+    E.xcodex_undo_in_progress = 1;
+    
+    /* Get the last undo group and save cursor position BEFORE any modifications */
+    int target_group = E.undo_stack[E.undo_count - 1].group_id;
+    int saved_cursor_row = E.undo_stack[E.undo_count - 1].cursor_row;
+    int saved_cursor_col = E.undo_stack[E.undo_count - 1].cursor_col;
+    int operations_undone = 0;
+    
+    /* Undo all operations in the group (in reverse order) */
+    while (E.undo_count > 0 && E.undo_stack[E.undo_count - 1].group_id == target_group) {
+        struct undoEntry *entry = &E.undo_stack[E.undo_count - 1];
+        
+        switch (entry->type) {
+            case UNDO_INSERT_CHAR:
+                /* Undo character insertion by deleting it */
+                if (entry->row >= 0 && entry->row < E.numrows) {
+                    erow *row = &E.row[entry->row];
+                    if (entry->col >= 0 && entry->col < row->size) {
+                        /* Direct character deletion without triggering undo */
+                        for (int i = entry->col; i < row->size - 1; i++) {
+                            row->chars[i] = row->chars[i + 1];
+                        }
+                        row->size--;
+                        row->chars[row->size] = '\0';
+                        editorUpdateRow(row);
+                    }
+                }
+                break;
+                
+            case UNDO_DELETE_CHAR:
+                /* Undo character deletion by inserting it back */
+                if (entry->data && entry->data_len > 0) {
+                    if (entry->row >= 0 && entry->row < E.numrows) {
+                        erow *row = &E.row[entry->row];
+                        if (entry->col >= 0 && entry->col <= row->size) {
+                            /* Direct character insertion without triggering undo */
+                            row->chars = realloc(row->chars, row->size + 2);
+                            if (row->chars) {
+                                for (int i = row->size; i > entry->col; i--) {
+                                    row->chars[i] = row->chars[i - 1];
+                                }
+                                row->chars[entry->col] = entry->data[0];
+                                row->size++;
+                                row->chars[row->size] = '\0';
+                                editorUpdateRow(row);
+                            }
+                        }
+                    }
+                }
+                break;
+                
+            case UNDO_INSERT_LINE:
+                /* Undo line insertion by deleting it */
+                if (entry->row >= 0 && entry->row < E.numrows) {
+                    /* Direct line deletion without triggering undo */
+                    erow *row = &E.row[entry->row];
+                    free(row->chars);
+                    free(row->render);
+                    free(row->hl);
+                    
+                    /* Shift all rows up */
+                    for (int i = entry->row; i < E.numrows - 1; i++) {
+                        E.row[i] = E.row[i + 1];
+                        E.row[i].idx = i;
+                    }
+                    E.numrows--;
+                    if (E.numrows == 0) {
+                        free(E.row);
+                        E.row = NULL;
+                    } else {
+                        E.row = realloc(E.row, sizeof(erow) * E.numrows);
+                    }
+                }
+                break;
+                
+            case UNDO_DELETE_LINE:
+                /* Undo line deletion by inserting it back */
+                if (entry->data && entry->row >= 0 && entry->row <= E.numrows) {
+                    /* Direct line insertion without triggering undo */
+                    E.row = realloc(E.row, sizeof(erow) * (E.numrows + 1));
+                    if (E.row) {
+                        /* Shift rows down */
+                        for (int i = E.numrows; i > entry->row; i--) {
+                            E.row[i] = E.row[i - 1];
+                            E.row[i].idx = i;
+                        }
+                        
+                        /* Create new row */
+                        E.row[entry->row].size = entry->data_len;
+                        E.row[entry->row].chars = malloc(entry->data_len + 1);
+                        if (E.row[entry->row].chars) {
+                            memcpy(E.row[entry->row].chars, entry->data, entry->data_len);
+                            E.row[entry->row].chars[entry->data_len] = '\0';
+                            E.row[entry->row].idx = entry->row;
+                            E.row[entry->row].render = NULL;
+                            E.row[entry->row].hl = NULL;
+                            E.row[entry->row].rsize = 0;
+                            E.row[entry->row].hl_oc = 0;
+                            editorUpdateRow(&E.row[entry->row]);
+                            E.numrows++;
+                        }
+                    }
+                }
+                break;
+                
+            case UNDO_SPLIT_LINE:
+                /* Undo line split by joining the lines */
+                if (entry->row >= 0 && entry->row < E.numrows - 1) {
+                    erow *row = &E.row[entry->row];
+                    erow *next_row = &E.row[entry->row + 1];
+                    
+                    /* Join lines directly */
+                    row->chars = realloc(row->chars, row->size + next_row->size + 1);
+                    if (row->chars) {
+                        memcpy(row->chars + row->size, next_row->chars, next_row->size);
+                        row->size += next_row->size;
+                        row->chars[row->size] = '\0';
+                        editorUpdateRow(row);
+                        
+                        /* Delete the next row */
+                        free(next_row->chars);
+                        free(next_row->render);
+                        free(next_row->hl);
+                        
+                        /* Shift rows up */
+                        for (int i = entry->row + 1; i < E.numrows - 1; i++) {
+                            E.row[i] = E.row[i + 1];
+                            E.row[i].idx = i;
+                        }
+                        E.numrows--;
+                        E.row = realloc(E.row, sizeof(erow) * E.numrows);
+                    }
+                }
+                break;
+                
+            case UNDO_JOIN_LINE:
+                /* Undo line join by splitting the line */
+                if (entry->row >= 0 && entry->row < E.numrows && entry->data) {
+                    erow *row = &E.row[entry->row];
+                    if (entry->col >= 0 && entry->col <= row->size) {
+                        /* Create new row for the split */
+                        E.row = realloc(E.row, sizeof(erow) * (E.numrows + 1));
+                        if (E.row) {
+                            /* Shift rows down */
+                            for (int i = E.numrows; i > entry->row + 1; i--) {
+                                E.row[i] = E.row[i - 1];
+                                E.row[i].idx = i;
+                            }
+                            
+                            /* Create the new row with the split content */
+                            int new_size = row->size - entry->col;
+                            E.row[entry->row + 1].size = new_size;
+                            E.row[entry->row + 1].chars = malloc(new_size + 1);
+                            if (E.row[entry->row + 1].chars) {
+                                memcpy(E.row[entry->row + 1].chars, row->chars + entry->col, new_size);
+                                E.row[entry->row + 1].chars[new_size] = '\0';
+                                E.row[entry->row + 1].idx = entry->row + 1;
+                                E.row[entry->row + 1].render = NULL;
+                                E.row[entry->row + 1].hl = NULL;
+                                E.row[entry->row + 1].rsize = 0;
+                                E.row[entry->row + 1].hl_oc = 0;
+                                editorUpdateRow(&E.row[entry->row + 1]);
+                                
+                                /* Truncate the original row */
+                                row->chars[entry->col] = '\0';
+                                row->size = entry->col;
+                                editorUpdateRow(row);
+                                E.numrows++;
+                            }
+                        }
+                    }
+                }
+                break;
+        }
+        
+        /* Free the entry data */
+        if (entry->data) {
+            free(entry->data);
+            entry->data = NULL;
+        }
+        
+        E.undo_count--;
+        operations_undone++;
+    }
+    
+    /* Restore cursor position using saved values */
+    if (operations_undone > 0) {
+        /* Set cursor position */
+        int target_row = saved_cursor_row;
+        int target_col = saved_cursor_col;
+        
+        /* Validate row bounds */
+        if (target_row < 0) target_row = 0;
+        if (target_row >= E.numrows) target_row = E.numrows > 0 ? E.numrows - 1 : 0;
+        
+        /* Validate column bounds */
+        if (E.numrows > 0 && target_row < E.numrows) {
+            if (target_col < 0) target_col = 0;
+            if (target_col > E.row[target_row].size) target_col = E.row[target_row].size;
+        } else {
+            target_col = 0;
+        }
+        
+        /* Adjust for screen position */
+        if (target_row < E.rowoff) {
+            E.rowoff = target_row;
+            E.cy = 0;
+        } else if (target_row >= E.rowoff + E.screenrows) {
+            E.rowoff = target_row - E.screenrows + 1;
+            if (E.rowoff < 0) E.rowoff = 0;
+            E.cy = E.screenrows - 1;
+        } else {
+            E.cy = target_row - E.rowoff;
+        }
+        
+        int effective_cols = E.screencols - E.line_numbers_width;
+        if (effective_cols < 1) effective_cols = 1;
+        
+        if (target_col < E.coloff) {
+            E.coloff = target_col;
+            E.cx = 0;
+        } else if (target_col >= E.coloff + effective_cols) {
+            E.coloff = target_col - effective_cols + 1;
+            if (E.coloff < 0) E.coloff = 0;
+            E.cx = effective_cols - 1;
+        } else {
+            E.cx = target_col - E.coloff;
+        }
+        
+        /* Ensure bounds */
+        if (E.cy < 0) E.cy = 0;
+        if (E.cy >= E.screenrows) E.cy = E.screenrows - 1;
+        if (E.cx < 0) E.cx = 0;
+        if (E.cx >= effective_cols) E.cx = effective_cols - 1;
+        
+        editorSetStatusMessage("Undone %d operation%s", operations_undone, 
+                            operations_undone == 1 ? "" : "s");
+        E.dirty++;
+    }
+    
+    /* Clear the recursion flag */
+    E.xcodex_undo_in_progress = 0;
+}
+
 enum KEY_ACTION{
         KEY_NULL = 0,       /* NULL */
+        CTRL_A = 1,         /* Ctrl-a */
+        CTRL_B = 2,         /* Ctrl-b */
         CTRL_C = 3,         /* Ctrl-c */
         CTRL_D = 4,         /* Ctrl-d */
+        CTRL_E = 5,         /* Ctrl-e */
         CTRL_F = 6,         /* Ctrl-f */
+        CTRL_G = 7,         /* Ctrl-g */
         CTRL_H = 8,         /* Ctrl-h */
-        TAB = 9,            /* Tab */
+        CTRL_I = 9,         /* Ctrl-i (Tab) */
+        CTRL_J = 10,        /* Ctrl-j */
+        CTRL_K = 11,        /* Ctrl-k */
         CTRL_L = 12,        /* Ctrl+l */
-        ENTER = 13,         /* Enter */
+        CTRL_M = 13,        /* Ctrl-m (Enter) */
         CTRL_N = 14,        /* Ctrl-n */
+        CTRL_O = 15,        /* Ctrl-o */
+        CTRL_P = 16,        /* Ctrl-p */
         CTRL_Q = 17,        /* Ctrl-q */
+        CTRL_R = 18,        /* Ctrl-r */
         CTRL_S = 19,        /* Ctrl-s */
         CTRL_T = 20,        /* Ctrl-t */
         CTRL_U = 21,        /* Ctrl-u */
+        CTRL_V = 22,        /* Ctrl-v */
+        CTRL_W = 23,        /* Ctrl-w */
+        CTRL_X = 24,        /* Ctrl-x */
+        CTRL_Y = 25,        /* Ctrl-y */
+        CTRL_Z = 26,        /* Ctrl-z */
+        TAB = 9,            /* Tab */
+        ENTER = 13,         /* Enter */
         ESC = 27,           /* Escape */
         BACKSPACE =  127,   /* Backspace */
         /* The following are just soft codes, not really reported by the
@@ -695,1027 +1500,31 @@ struct abuf {
 
 void abAppend(struct abuf *ab, const char *s, int len);
 
-/* =========================== Syntax highlights DB =========================
- *
- * In order to add a new syntax, define two arrays with a list of file name
- * matches and keywords. The file name matches are used in order to match
- * a given syntax with a given file name: if a match pattern starts with a
- * dot, it is matched as the last past of the filename, for example ".c".
- * Otherwise the pattern is just searched inside the filenme, like "Makefile").
- *
- * The list of keywords to highlight is just a list of words, however if they
- * a trailing '|' character is added at the end, they are highlighted in
- * a different color, so that you can have two different sets of keywords.
- *
- * Finally add a stanza in the HLDB global variable with two two arrays
- * of strings, and a set of flags in order to enable highlighting of
- * comments and numbers.
- *
- * The characters for single and multi line comments must be exactly two
- * and must be provided as well (see the C language example).
- *
- * There is no support to highlight patterns currently. */
 
-/* C / C++ */
-char *C_HL_extensions[] = {".c",".h",".cpp",".hpp",".cc",NULL};
-char *C_HL_keywords[] = {
-    /* C Keywords (HL_KEYWORD1) */
-    "auto","break","case","continue","default","do","else","enum",
-    "extern","for","goto","if","register","return","sizeof","static",
-    "struct","switch","typedef","union","volatile","while",
-    /* C99+ Keywords */
-    "const","inline","restrict","_Alignas","_Alignof","_Atomic",
-    "_Bool","_Complex","_Generic","_Imaginary","_Noreturn","_Static_assert",
-    "_Thread_local",
-
-    /* C++ Keywords (HL_KEYWORD1) */
-    "alignas","alignof","and","and_eq","asm","bitand","bitor","class",
-    "compl","constexpr","const_cast","decltype","delete","dynamic_cast",
-    "explicit","export","false","friend","mutable","namespace",
-    "new","noexcept","not","not_eq","nullptr","operator","or","or_eq",
-    "private","protected","public","reinterpret_cast","static_assert",
-    "static_cast","template","this","thread_local","throw","true","try",
-    "typeid","typename","virtual","xor","xor_eq","catch",
-    /* C++11/14/17/20 Keywords */
-    "concept","consteval","constinit","co_await","co_return","co_yield",
-    "final","import","module","override","requires",
-
-    /* C/C++ Types (HL_KEYWORD2) */
-    "int|","long|","double|","float|","char|","unsigned|","signed|",
-    "void|","short|","bool|","size_t|","wchar_t|","ptrdiff_t|",
-    /* Fixed-width integer types */
-    "int8_t|","int16_t|","int32_t|","int64_t|",
-    "uint8_t|","uint16_t|","uint32_t|","uint64_t|",
-    "int_least8_t|","int_least16_t|","int_least32_t|","int_least64_t|",
-    "uint_least8_t|","uint_least16_t|","uint_least32_t|","uint_least64_t|",
-    "int_fast8_t|","int_fast16_t|","int_fast32_t|","int_fast64_t|",
-    "uint_fast8_t|","uint_fast16_t|","uint_fast32_t|","uint_fast64_t|",
-    "intmax_t|","uintmax_t|","intptr_t|","uintptr_t|",
-    /* Other C standard types */
-    "FILE|","time_t|","clock_t|","va_list|","jmp_buf|",
-    "sig_atomic_t|","fpos_t|","div_t|","ldiv_t|",
-    "float_t|","double_t|","ssize_t|","max_align_t|",
-    "char16_t|","char32_t|","mbstate_t|","locale_t|",
-
-    /* C Standard Library Functions (HL_KEYWORD3) */
-    /* I/O functions */
-    "printf||","scanf||","fprintf||","fscanf||","sprintf||","sscanf||",
-    "fopen||","fclose||","fread||","fwrite||","fseek||","ftell||",
-    "fgets||","fputs||","fflush||","freopen||","remove||","rename||",
-    "fgetc||","fputc||","getc||","putc||","getchar||","putchar||",
-    /* String functions */
-    "strlen||","strcpy||","strncpy||","strcat||","strncat||",
-    "strcmp||","strncmp||","strchr||","strrchr||","strstr||",
-    "strtok||","strpbrk||","strspn||","strcspn||","strerror||",
-    /* Memory management */
-    "malloc||","calloc||","realloc||","free||","memset||","memcpy||","memmove||",
-    /* Character classification */
-    "isalpha||","isdigit||","isalnum||","isspace||","iscntrl||",
-    "isgraph||","islower||","isupper||","isprint||","ispunct||",
-    "tolower||","toupper||",
-    /* Conversion functions */
-    "atoi||","atol||","atof||","strtol||","strtod||","strtoul||",
-    /* Math functions */
-    "abs||","labs||","fabs||","floor||","ceil||","sqrt||","pow||",
-    "sin||","cos||","tan||","asin||","acos||","atan||","exp||","log||",
-    /* Utility functions */
-    "qsort||","bsearch||","div||","ldiv||","rand||","srand||",
-    "time||","difftime||","clock||","mktime||","asctime||","ctime||",
-    "localtime||","gmtime||","strftime||","exit||","abort||",
-    "assert||","setjmp||","longjmp||","signal||",
-    
-    /* Important constants and macros */
-    "NULL||","EOF||","SEEK_SET||","SEEK_CUR||","SEEK_END||",
-    "EXIT_SUCCESS||","EXIT_FAILURE||","RAND_MAX||","INT_MIN||","INT_MAX||",
-    "LONG_MIN||","LONG_MAX||","UINT_MAX||","LLONG_MIN||","LLONG_MAX||",
-    "ULLONG_MAX||","CHAR_MIN||","CHAR_MAX||","CHAR_BIT||","SIZE_MAX||",
-    "stdin||","stdout||","stderr||","true||","false||",
-    
-    /* Common preprocessor directives (highlighted as keywords) */
-    "define","include","ifdef","ifndef","endif","if","elif","else",
-    "error","pragma","undef","line",
-    NULL
-};
-
-/* Python */
-char *Python_HL_extensions[] = {".py",".pyw",".pyi",".py3",NULL};
-char *Python_HL_keywords[] = {
-    /* Python Keywords (HL_KEYWORD1) */
-    "and","as","assert","break","class","continue","def","del","elif",
-    "else","except","finally","for","from","global","if","import",
-    "in","is","lambda","not","or","pass","print","raise","return","try",
-    "while","with","yield","async","await","nonlocal","False","None",
-    "True","match","case","_","type","self","cls",
-    
-    /* Python Built-in Types and Constants (HL_KEYWORD2) */
-    "bool|","int|","float|","complex|","str|","bytes|","bytearray|",
-    "list|","tuple|","dict|","set|","frozenset|","object|","type|",
-    "function|","method|","module|","memoryview|","range|","slice|",
-    "property|","classmethod|","staticmethod|","Ellipsis|","NotImplemented|",
-    "NoneType|","generator|","coroutine|","iterator|","sequence|","mapping|",
-    "__annotations__|","__dict__|","__doc__|","__file__|","__name__|",
-    "__package__|","__spec__|","__loader__|","__path__|","__class__|",
-    
-    /* Python Built-in Functions and Methods (HL_KEYWORD3) */
-    "abs||","all||","any||","ascii||","bin||","bool||","breakpoint||",
-    "bytearray||","bytes||","callable||","chr||","classmethod||","compile||",
-    "complex||","delattr||","dict||","dir||","divmod||","enumerate||","eval||",
-    "exec||","filter||","float||","format||","frozenset||","getattr||",
-    "globals||","hasattr||","hash||","help||","hex||","id||","input||","int||",
-    "isinstance||","issubclass||","iter||","len||","list||","locals||","map||",
-    "max||","memoryview||","min||","next||","object||","oct||","open||","ord||",
-    "pow||","print||","property||","range||","repr||","reversed||","round||",
-    "set||","setattr||","slice||","sorted||","staticmethod||","str||","sum||",
-    "super||","tuple||","type||","vars||","zip||","__import__||",
-    
-    /* Common Python Modules and Their Functions */
-    "os||","sys||","re||","math||","datetime||","json||","random||",
-    "collections||","itertools||","functools||","pathlib||","time||",
-    "os.path||","numpy||","pandas||","matplotlib||","requests||",
-    "unittest||","pytest||","logging||","argparse||","csv||","pickle||",
-    "sqlite3||","socket||","subprocess||","threading||","multiprocessing||",
-    
-    /* Common Methods */
-    "append||","extend||","insert||","remove||","pop||","clear||","index||",
-    "count||","sort||","reverse||","copy||","deepcopy||","keys||","values||",
-    "items||","get||","update||","add||","discard||","join||","split||",
-    "strip||","lstrip||","rstrip||","replace||","format||","startswith||",
-    "endswith||","find||","rfind||","lower||","upper||","title||","read||",
-    "write||","close||","seek||","tell||","readline||","readlines||",
-    
-    /* Common Exception Types */
-    "Exception||","ArithmeticError||","AssertionError||","AttributeError||",
-    "BaseException||","BlockingIOError||","BrokenPipeError||","BufferError||",
-    "ChildProcessError||","ConnectionError||","EOFError||","FileExistsError||",
-    "FileNotFoundError||","FloatingPointError||","ImportError||",
-    "IndentationError||","IndexError||","InterruptedError||","IsADirectoryError||",
-    "KeyError||","KeyboardInterrupt||","LookupError||","MemoryError||",
-    "ModuleNotFoundError||","NameError||","NotADirectoryError||",
-    "NotImplementedError||","OSError||","OverflowError||","PermissionError||",
-    "ProcessLookupError||","RecursionError||","ReferenceError||","RuntimeError||",
-    "StopIteration||","StopAsyncIteration||","SyntaxError||","SystemError||",
-    "SystemExit||","TabError||","TimeoutError||","TypeError||",
-    "UnboundLocalError||","UnicodeError||","UnicodeDecodeError||",
-    "UnicodeEncodeError||","UnicodeTranslateError||","ValueError||",
-    "ZeroDivisionError||",
-    NULL
-};
-
-/* JavaScript */
-char *JS_HL_extensions[] = {".js",".jsx",".mjs",".cjs",NULL};
-char *JS_HL_keywords[] = {
-    /* JavaScript Keywords (HL_KEYWORD1) */
-    "break","case","catch","class","const","continue","debugger","default",
-    "delete","do","else","export","extends","finally","for","function",
-    "if","import","in","instanceof","let","new","return","super","switch",
-    "this","throw","try","typeof","var","void","while","with","yield",
-    "async","await","of","static","get","set","from","as","enum",
-    "implements","interface","package","private","protected","public",
-    "arguments","eval","globalThis",
-    
-    /* JavaScript Built-in Types (HL_KEYWORD2) */
-    "undefined|","null|","boolean|","number|","string|","symbol|","object|","bigint|",
-    "Array|","Object|","Function|","String|","Number|","Boolean|","Date|",
-    "RegExp|","Error|","Promise|","Map|","Set|","WeakMap|","WeakSet|","Symbol|",
-    "Int8Array|","Uint8Array|","Uint8ClampedArray|","Int16Array|","Uint16Array|",
-    "Int32Array|","Uint32Array|","Float32Array|","Float64Array|","BigInt64Array|",
-    "BigUint64Array|","ArrayBuffer|","SharedArrayBuffer|","DataView|","Proxy|",
-    "Reflect|","Intl|","WebAssembly|","Generator|","GeneratorFunction|","AsyncFunction|",
-    "HTMLElement|","Element|","Node|","Document|","Window|","Event|","File|","Blob|",
-    
-    /* JavaScript Built-in Functions and Objects (HL_KEYWORD3) */
-    "console||","console.log||","console.error||","console.warn||","console.info||",
-    "console.debug||","console.table||","console.time||","console.timeEnd||",
-    "parseInt||","parseFloat||","isNaN||","isFinite||","isInteger||",
-    "encodeURI||","decodeURI||","encodeURIComponent||","decodeURIComponent||",
-    "setTimeout||","setInterval||","clearTimeout||","clearInterval||","requestAnimationFrame||",
-    "JSON||","JSON.parse||","JSON.stringify||","Math||","Math.abs||","Math.floor||",
-    "Math.ceil||","Math.round||","Math.max||","Math.min||","Math.random||",
-    "Object.keys||","Object.values||","Object.entries||","Object.assign||","Object.create||",
-    "Array.isArray||","Array.from||","Array.of||","Promise.all||","Promise.race||",
-    "Promise.resolve||","Promise.reject||","Promise.allSettled||","String.fromCharCode||",
-    "document||","window||","location||","history||","localStorage||","sessionStorage||",
-    "navigator||","fetch||","XMLHttpRequest||","WebSocket||","Worker||","FormData||",
-    "URL||","URLSearchParams||","alert||","confirm||","prompt||","performance||",
-    "addEventListener||","removeEventListener||","querySelector||","querySelectorAll||",
-    NULL
-};
-
-/* TypeScript */
-char *TS_HL_extensions[] = {".ts",".tsx",".d.ts",NULL};
-char *TS_HL_keywords[] = {
-    /* TypeScript Keywords (HL_KEYWORD1) */
-    "abstract","any","as","asserts","bigint","boolean","break","case","catch",
-    "class","const","continue","debugger","declare","default","delete","do",
-    "else","enum","export","extends","false","finally","for","from","function",
-    "get","if","implements","import","in","infer","instanceof","interface",
-    "is","keyof","let","module","namespace","never","new","null","number",
-    "object","package","private","protected","public","readonly","require",
-    "return","set","static","string","super","switch","symbol","this","throw",
-    "true","try","type","typeof","undefined","unique","unknown","var","void",
-    "while","with","yield","async","await","of","satisfies","override",
-    "accessor","global","out","using","intrinsic","as const","in keyof",
-
-    /* TypeScript Built-in Types (HL_KEYWORD2) */
-    "string|","number|","boolean|","object|","undefined|","null|","void|",
-    "never|","unknown|","any|","bigint|","symbol|","Array|","Promise|",
-    "Record|","Partial|","Required|","Pick|","Omit|","Exclude|","Extract|",
-    "Readonly|","ReadonlyArray|","NonNullable|","ReturnType|","Parameters|",
-    "InstanceType|","ThisParameterType|","OmitThisParameter|","ThisType|",
-    "Uppercase|","Lowercase|","Capitalize|","Uncapitalize|","Map|","Set|",
-    "WeakMap|","WeakSet|","Date|","RegExp|","Error|","Function|","Tuple|",
-    "Awaited|","ArrayLike|","Iterator|","IterableIterator|","PropertyKey|",
-    "ConstructorParameters|","CallableFunction|","NewableFunction|",
-    "ConcatArray|","ReadonlyMap|","ReadonlySet|","ClassDecorator|",
-    "PropertyDecorator|","MethodDecorator|","ParameterDecorator|",
-    "Iterable|","AsyncIterable|","Generator|","AsyncGenerator|",
-
-    /* TypeScript DOM Types (HL_KEYWORD2) */
-    "HTMLElement|","Node|","Document|","Window|","Event|","EventTarget|",
-    "MouseEvent|","KeyboardEvent|","TouchEvent|","NodeList|","Element|",
-    "CSSStyleDeclaration|","DOMParser|","FileReader|","Blob|","File|",
-    "URL|","URLSearchParams|","Request|","Response|","Headers|",
-    "FormData|","WebSocket|","Worker|","MutationObserver|","IntersectionObserver|",
-    "ResizeObserver|","Performance|","SVGElement|","Canvas|","CanvasRenderingContext2D|",
-
-    /* TypeScript Utility Functions and Objects (HL_KEYWORD3) */
-    "console||","parseInt||","parseFloat||","isNaN||","isFinite||",
-    "JSON||","Math||","Object||","Array||","String||","Number||","Boolean||",
-    "Promise||","Date||","Map||","Set||","WeakMap||","WeakSet||","Proxy||",
-    "Reflect||","Symbol||","RegExp||","Error||","encodeURI||","decodeURI||",
-    "encodeURIComponent||","decodeURIComponent||","setTimeout||","clearTimeout||",
-    "setInterval||","clearInterval||","requestAnimationFrame||","cancelAnimationFrame||",
-    "localStorage||","sessionStorage||","navigator||","location||","history||",
-    "document||","window||","globalThis||","fetch||","XMLHttpRequest||",
-    "alert||","confirm||","prompt||","Error||","SyntaxError||","TypeError||",
-    "RangeError||","ReferenceError||","EvalError||","URIError||","AggregateError||",
-    "Intl||","structuredClone||","crypto||","performance||","console.log||",
-    "console.error||","console.warn||","console.info||","console.debug||",
-    "console.table||","console.time||","console.timeEnd||","console.trace||",
-    "Array.isArray||","Object.keys||","Object.values||","Object.entries||",
-    "Object.assign||","Object.create||","Object.defineProperty||",
-    "Promise.all||","Promise.race||","Promise.resolve||","Promise.reject||",
-    "Promise.allSettled||","Promise.any||",
-    NULL
-};
-
-/* HTML */
-char *HTML_HL_extensions[] = {".html",".htm",".xhtml",".shtml",NULL};
-char *HTML_HL_keywords[] = {
-    /* HTML Structure Tags (HL_KEYWORD1) */
-    "html","head","body","title","meta","link","script","style","template",
-    "slot","shadow","base","noscript","iframe","object","embed","param",
-    
-    /* HTML Content Sectioning (HL_KEYWORD1) */
-    "div","span","h1","h2","h3","h4","h5","h6","p","br","hr","header",
-    "footer","section","article","aside","main","nav","dialog","details",
-    "summary","figure","figcaption","address","blockquote","pre","code",
-    
-    /* HTML Lists and Tables (HL_KEYWORD1) */
-    "ul","ol","li","dl","dt","dd","table","tr","td","th","thead","tbody",
-    "tfoot","caption","col","colgroup",
-    
-    /* HTML Form Elements (HL_KEYWORD1) */
-    "form","input","button","select","option","optgroup","textarea","label",
-    "fieldset","legend","datalist","output","progress","meter","keygen",
-    
-    /* HTML Media Elements (HL_KEYWORD1) */
-    "a","img","audio","video","source","track","canvas","svg","picture",
-    "map","area","portal",
-    
-    /* HTML Common Attributes (HL_KEYWORD2) */
-    "id|","class|","style|","src|","href|","alt|","title|","width|","height|",
-    "lang|","dir|","hidden|","tabindex|","accesskey|","draggable|","translate|",
-    "contenteditable|","spellcheck|","autocapitalize|","enterkeyhint|","inputmode|",
-    
-    /* HTML Form Attributes (HL_KEYWORD2) */
-    "type|","value|","name|","placeholder|","required|","disabled|",
-    "readonly|","checked|","selected|","multiple|","autofocus|","pattern|",
-    "min|","max|","step|","maxlength|","minlength|","size|","autocomplete|",
-    "action|","method|","enctype|","novalidate|","for|","form|","formaction|",
-    "formmethod|","formenctype|","formnovalidate|","formtarget|",
-    
-    /* HTML Link & Resource Attributes (HL_KEYWORD2) */
-    "target|","rel|","download|","media|","crossorigin|","integrity|",
-    "referrerpolicy|","loading|","decoding|","importance|","fetchpriority|",
-    
-    /* HTML Metadata Attributes (HL_KEYWORD2) */
-    "charset|","content|","http-equiv|","property|","itemprop|","itemscope|",
-    "itemtype|","itemid|","async|","defer|","nonce|","data-*|",
-    
-    /* WAI-ARIA Accessibility Attributes (HL_KEYWORD2) */
-    "role|","aria-label|","aria-labelledby|","aria-describedby|","aria-hidden|",
-    "aria-expanded|","aria-controls|","aria-live|","aria-atomic|","aria-relevant|",
-    "aria-disabled|","aria-haspopup|","aria-pressed|","aria-checked|","aria-selected|",
-    "aria-current|","aria-invalid|","aria-required|","aria-orientation|","aria-level|",
-    
-    /* HTML5 Semantic & Special Elements (HL_KEYWORD3) */
-    "article||","section||","nav||","aside||","header||","footer||","main||",
-    "mark||","time||","ruby||","rt||","rp||","bdi||","wbr||","data||",
-    "abbr||","cite||","dfn||","em||","strong||","small||","sub||","sup||",
-    "samp||","kbd||","var||","q||","u||","b||","i||","s||","del||","ins||",
-    "dialog||","slot||","template||","picture||","portal||","search||",
-    
-    /* HTML5 Interactive & Media Elements (HL_KEYWORD3) */
-    "audio||","video||","canvas||","svg||","math||","progress||","meter||",
-    "details||","summary||","dialog||","datalist||","output||","track||",
-    
-    /* HTML Global Event Attributes (HL_KEYWORD3) */
-    "onclick||","onchange||","onsubmit||","onload||","oninput||","onfocus||",
-    "onblur||","onkeydown||","onkeyup||","onmouseover||","onmouseout||",
-    "ondragstart||","ondrop||","onscroll||","ontouchstart||","ontouchend||",
-    NULL
-};
-
-/* CSS */
-char *CSS_HL_extensions[] = {".css",".scss",".sass",".less",NULL};
-char *CSS_HL_keywords[] = {
-    /* CSS Layout Properties (HL_KEYWORD1) */
-    "display","position","top","right","bottom","left","z-index","float","clear",
-    "width","height","max-width","max-height","min-width","min-height",
-    "overflow","overflow-x","overflow-y","resize","clip","visibility",
-    "margin","margin-top","margin-right","margin-bottom","margin-left",
-    "padding","padding-top","padding-right","padding-bottom","padding-left",
-    "box-sizing","object-fit","object-position","aspect-ratio",
-    
-    /* CSS Flexbox Properties */
-    "flex","flex-direction","flex-wrap","flex-flow","flex-grow","flex-shrink",
-    "flex-basis","justify-content","align-items","align-self","align-content",
-    "gap","row-gap","column-gap","order",
-    
-    /* CSS Grid Properties */
-    "grid","grid-template","grid-template-rows","grid-template-columns","grid-template-areas",
-    "grid-auto-rows","grid-auto-columns","grid-auto-flow","grid-row","grid-column",
-    "grid-area","grid-row-start","grid-row-end","grid-column-start","grid-column-end",
-    
-    /* CSS Background & Border Properties */
-    "color","background","background-color","background-image","background-repeat",
-    "background-attachment","background-position","background-size","background-origin",
-    "background-clip","background-blend-mode","border","border-width","border-style",
-    "border-color","border-top","border-right","border-bottom","border-left",
-    "border-radius","border-top-left-radius","border-top-right-radius",
-    "border-bottom-right-radius","border-bottom-left-radius","border-image",
-    "border-collapse","outline","outline-width","outline-style","outline-color",
-    "outline-offset","box-shadow","mask","mask-image","mask-position",
-    
-    /* CSS Typography Properties */
-    "font","font-family","font-size","font-weight","font-style","font-variant",
-    "font-stretch","line-height","letter-spacing","word-spacing","text-align",
-    "text-decoration","text-decoration-line","text-decoration-style","text-decoration-color",
-    "text-transform","text-indent","text-overflow","text-shadow","white-space",
-    "vertical-align","word-break","word-wrap","overflow-wrap","hyphens",
-    "direction","unicode-bidi","writing-mode","text-orientation","quotes",
-    
-    /* CSS Transform & Animation Properties */
-    "transform","transform-origin","transform-style","backface-visibility",
-    "perspective","perspective-origin","transition","transition-property",
-    "transition-duration","transition-timing-function","transition-delay",
-    "animation","animation-name","animation-duration","animation-timing-function",
-    "animation-delay","animation-iteration-count","animation-direction",
-    "animation-fill-mode","animation-play-state",
-    
-    /* CSS Other Properties */
-    "opacity","filter","backdrop-filter","cursor","pointer-events","user-select",
-    "list-style","list-style-type","list-style-position","list-style-image",
-    "table-layout","caption-side","empty-cells","content","counter-reset",
-    "counter-increment","will-change","scroll-behavior","overscroll-behavior",
-    "contain","isolation","mix-blend-mode","appearance","touch-action",
-    "color-scheme","accent-color","caret-color","scrollbar-color","scrollbar-width",
-    "place-items","place-content","place-self","all","container","container-type",
-    
-    /* CSS Values (HL_KEYWORD2) */
-    "auto|","none|","inherit|","initial|","unset|","revert|","revert-layer|",
-    "block|","inline|","inline-block|","flex|","grid|","contents|","flow-root|",
-    "absolute|","relative|","fixed|","static|","sticky|","hidden|","visible|",
-    "scroll|","auto|","clip|","ellipsis|","nowrap|","break-word|","normal|",
-    "bold|","bolder|","lighter|","italic|","oblique|","underline|","overline|",
-    "line-through|","solid|","dashed|","dotted|","double|","groove|","ridge|",
-    "inset|","outset|","center|","left|","right|","justify|","top|","bottom|",
-    "middle|","transparent|","currentcolor|","repeat|","no-repeat|","repeat-x|","repeat-y|",
-    "cover|","contain|","pointer|","default|","move|","grab|","zoom-in|","zoom-out|",
-    "row|","column|","row-reverse|","column-reverse|","wrap|","nowrap|","wrap-reverse|",
-    "start|","end|","flex-start|","flex-end|","space-between|","space-around|","space-evenly|",
-    "stretch|","baseline|","first|","last|","ease|","ease-in|","ease-out|","ease-in-out|",
-    "linear|","step-start|","step-end|","forwards|","backwards|","both|","infinite|",
-    "paused|","running|","alternate|","alternate-reverse|","normal|","reverse|",
-    "uppercase|","lowercase|","capitalize|","small-caps|","subgrid|","masonry|",
-    
-    /* CSS Color Values */
-    "black|","white|","red|","green|","blue|","yellow|","magenta|","cyan|",
-    "gray|","grey|","silver|","maroon|","olive|","navy|","purple|","teal|",
-    "aqua|","fuchsia|","lime|","orange|","brown|","pink|","violet|","indigo|",
-    
-    /* CSS Units */
-    "px|","em|","rem|","vh|","vw|","vmin|","vmax|","dvh|","svh|","lvh|",
-    "ex|","ch|","%|","pt|","pc|","in|","cm|","mm|","fr|","s|","ms|","deg|",
-    "rad|","grad|","turn|","dpi|","dpcm|","dppx|",
-    
-    /* CSS Functions (HL_KEYWORD3) */
-    "rgb||","rgba||","hsl||","hsla||","hwb||","lab||","lch||","color||",
-    "url||","attr||","calc||","clamp||","min||","max||","var||","env||",
-    "linear-gradient||","radial-gradient||","conic-gradient||","repeating-linear-gradient||",
-    "repeating-radial-gradient||","repeating-conic-gradient||","image-set||",
-    "translate||","translateX||","translateY||","translateZ||","translate3d||",
-    "scale||","scaleX||","scaleY||","scaleZ||","scale3d||",
-    "rotate||","rotateX||","rotateY||","rotateZ||","rotate3d||",
-    "skew||","skewX||","skewY||","matrix||","matrix3d||","perspective||",
-    "blur||","brightness||","contrast||","drop-shadow||","grayscale||",
-    "hue-rotate||","invert||","opacity||","saturate||","sepia||",
-    "cubic-bezier||","steps||","counter||","counters||","element||",
-    "not||","is||","where||","has||","nth-child||","nth-of-type||",
-    "cross-fade||","fit-content||","minmax||","repeat||","symbols||",
-    "supports||","theme||","format||","local||","from||","to||",
-    NULL
-};
-
-/* Lua */
-char *Lua_HL_extensions[] = {".lua",NULL};
-char *Lua_HL_keywords[] = {
-    /* Lua Keywords (HL_KEYWORD1) */
-    "and","break","do","else","elseif","end","false","for","function",
-    "goto","if","in","local","nil","not","or","repeat","return","then",
-    "true","until","while","_ENV","_G",
-    
-    /* Lua Built-in Types and Values (HL_KEYWORD2) */
-    "nil|","boolean|","number|","string|","function|","userdata|","thread|","table|",
-    "integer|","float|","true|","false|","...","self|","_VERSION|",
-    
-    /* Lua Built-in Functions and Libraries (HL_KEYWORD3) */
-    /* Global functions */
-    "assert||","collectgarbage||","dofile||","error||","getmetatable||",
-    "ipairs||","load||","loadfile||","next||","pairs||","pcall||","print||",
-    "rawequal||","rawget||","rawlen||","rawset||","require||","select||",
-    "setmetatable||","tonumber||","tostring||","type||","xpcall||",
-    /* Standard libraries */
-    "coroutine||","debug||","io||","math||","os||","package||","string||","table||","utf8||",
-    /* String methods */
-    "string.byte||","string.char||","string.dump||","string.find||","string.format||",
-    "string.gmatch||","string.gsub||","string.len||","string.lower||","string.match||",
-    "string.rep||","string.reverse||","string.sub||","string.upper||",
-    /* Table methods */
-    "table.concat||","table.insert||","table.move||","table.pack||","table.remove||",
-    "table.sort||","table.unpack||",
-    /* Math functions */
-    "math.abs||","math.acos||","math.asin||","math.atan||","math.ceil||",
-    "math.cos||","math.deg||","math.exp||","math.floor||","math.fmod||",
-    "math.huge||","math.log||","math.max||","math.min||","math.modf||",
-    "math.pi||","math.rad||","math.random||","math.randomseed||","math.sin||",
-    "math.sqrt||","math.tan||",
-    /* IO functions */
-    "io.close||","io.flush||","io.input||","io.lines||","io.open||",
-    "io.output||","io.popen||","io.read||","io.tmpfile||","io.type||","io.write||",
-    /* OS functions */
-    "os.clock||","os.date||","os.difftime||","os.execute||","os.exit||",
-    "os.getenv||","os.remove||","os.rename||","os.setlocale||","os.time||",
-    /* Coroutine functions */
-    "coroutine.create||","coroutine.isyieldable||","coroutine.resume||",
-    "coroutine.running||","coroutine.status||","coroutine.wrap||","coroutine.yield||",
-    NULL
-};
-
-/* Go */
-char *Go_HL_extensions[] = {".go",NULL};
-char *Go_HL_keywords[] = {
-    /* Go Keywords (HL_KEYWORD1) */
-    "break","case","chan","const","continue","default","defer","else",
-    "fallthrough","for","func","go","goto","if","import","interface",
-    "map","package","range","return","select","struct","switch","type","var",
-    "iota","nil","true","false","_",
-
-    /* Go Built-in Types (HL_KEYWORD2) */
-    "bool|","byte|","complex64|","complex128|","error|","float32|","float64|",
-    "int|","int8|","int16|","int32|","int64|","rune|","string|","uint|",
-    "uint8|","uint16|","uint32|","uint64|","uintptr|","any|","comparable|",
-    "Context|","Reader|","Writer|","ReadWriter|","ReadCloser|","WriteCloser|",
-    "ReadWriteCloser|","Error|","Handler|","ResponseWriter|","Request|",
-    "Time|","Duration|","WaitGroup|","Mutex|","RWMutex|","Cond|","Once|",
-    
-    /* Go Built-in Functions and Common Methods (HL_KEYWORD3) */
-    /* Built-in functions */
-    "append||","cap||","close||","complex||","copy||","delete||","imag||",
-    "len||","make||","new||","panic||","print||","println||","real||","recover||",
-    /* Common standard library packages */
-    "fmt||","log||","os||","io||","time||","context||","sync||","net||","http||",
-    "strings||","bytes||","strconv||","math||","sort||","encoding||","json||",
-    "xml||","crypto||","database||","sql||","regexp||","reflect||","path||",
-    "filepath||","bufio||","flag||","errors||","testing||",
-    /* Common methods */
-    "Printf||","Sprintf||","Fprintf||","Println||","Sprint||","Fprintln||",
-    "Error||","String||","MarshalJSON||","UnmarshalJSON||","Scan||","Exec||",
-    "Query||","QueryRow||","Open||","Close||","Read||","Write||","ReadFrom||",
-    "WriteTo||","Marshal||","Unmarshal||","New||","Add||","Done||","Wait||",
-    "Lock||","Unlock||","RLock||","RUnlock||","Listen||","ListenAndServe||",
-    "Handle||","HandleFunc||","Get||","Post||","Set||","Do||","Parse||",
-    "Execute||","Sleep||","Now||","Since||","Until||","Format||","Join||",
-    "Split||","Replace||","Contains||","HasPrefix||","HasSuffix||","TrimSpace||",
-    "NewReader||","NewWriter||","NewDecoder||","NewEncoder||","Fatal||",
-    "Fatalf||","Copy||","CopyN||","Create||","Remove||","Mkdir||","MkdirAll||",
-    NULL
-};
-
-/* Rust */
-char *Rust_HL_extensions[] = {".rs",NULL};
-char *Rust_HL_keywords[] = {
-    /* Rust Keywords (HL_KEYWORD1) */
-    "as","async","await","break","const","continue","crate","dyn","else",
-    "enum","extern","false","fn","for","if","impl","in","let","loop",
-    "match","mod","move","mut","pub","ref","return","self","Self","static",
-    "struct","super","trait","true","type","unsafe","use","where","while",
-    "abstract","become","box","do","final","macro","override","priv","typeof",
-    "unsized","virtual","yield","try","union","catch","default","macro_rules",
-    
-    /* Rust Built-in Types (HL_KEYWORD2) */
-    "bool|","char|","str|","i8|","i16|","i32|","i64|","i128|","isize|",
-    "u8|","u16|","u32|","u64|","u128|","usize|","f32|","f64|","String|",
-    "Vec|","Option|","Result|","Box|","Rc|","Arc|","RefCell|","Mutex|",
-    "HashMap|","HashSet|","BTreeMap|","BTreeSet|","VecDeque|","LinkedList|",
-    "BinaryHeap|","Cell|","RwLock|","Cow|","Path|","PathBuf|","OsString|",
-    "Ordering|","Range|","RangeInclusive|","RangeTo|","RangeFrom|","Duration|",
-    "Instant|","SystemTime|","PhantomData|","Pin|","Future|","Stream|","Iterator|",
-    "Send|","Sync|","Copy|","Clone|","Debug|","Display|","Error|","From|","Into|",
-    
-    /* Rust Built-in Functions and Macros (HL_KEYWORD3) */
-    "println||","print||","panic||","assert||","assert_eq||","assert_ne||",
-    "debug_assert||","unreachable||","unimplemented||","todo||","compile_error||",
-    "format||","vec||","Some||","None||","Ok||","Err||","Default||","Clone||",
-    "include||","include_str||","include_bytes||","concat||","env||","option_env||",
-    "file||","line||","column||","module_path||","cfg||","stringify||","dbg||",
-    "eprint||","eprintln||","write||","writeln||","format_args||","from_iter||",
-    "iter||","into_iter||","collect||","map||","filter||","fold||","reduce||",
-    "find||","any||","all||","count||","enumerate||","zip||","rev||","sorted||",
-    "to_string||","to_owned||","as_ref||","as_mut||","unwrap||","expect||",
-    "unwrap_or||","unwrap_or_else||","unwrap_or_default||","is_some||","is_none||",
-    "is_ok||","is_err||","and_then||","or_else||","map_err||","new||","default||",
-    "len||","is_empty||","contains||","insert||","remove||","get||","set||",
-    NULL
-};
-
-/* Java */
-char *Java_HL_extensions[] = {".java",NULL};
-char *Java_HL_keywords[] = {
-    /* Java Keywords (HL_KEYWORD1) */
-    "abstract","assert","boolean","break","byte","case","catch","char","class",
-    "const","continue","default","do","double","else","enum","extends","final",
-    "finally","float","for","goto","if","implements","import","instanceof",
-    "int","interface","long","native","new","package","private","protected",
-    "public","return","short","static","strictfp","super","switch","synchronized",
-    "this","throw","throws","transient","try","void","volatile","while",
-    /* Java 8+ Keywords */
-    "var","module","requires","exports","opens","uses","provides","with","to",
-    "yield","sealed","permits","record","non-sealed",
-    
-    /* Java Built-in Types (HL_KEYWORD2) */
-    "boolean|","byte|","char|","double|","float|","int|","long|","short|",
-    "String|","Object|","Class|","Integer|","Double|","Float|","Boolean|",
-    "Character|","Byte|","Short|","Long|","BigInteger|","BigDecimal|",
-    /* Collections */
-    "ArrayList|","HashMap|","HashSet|","LinkedList|","TreeMap|","TreeSet|",
-    "Queue|","Deque|","LinkedHashMap|","LinkedHashSet|","ConcurrentHashMap|",
-    "PriorityQueue|","Vector|","Stack|","CopyOnWriteArrayList|",
-    /* Functional Interfaces */
-    "Function|","Consumer|","Supplier|","Predicate|","BiFunction|","BiConsumer|",
-    "BiPredicate|","UnaryOperator|","BinaryOperator|","Runnable|","Callable|",
-    /* Utility Types */
-    "Optional|","Stream|","Collector|","Collectors|","Arrays|","Collections|",
-    "Comparator|","Iterable|","Iterator|","Enum|","Thread|","ThreadLocal|",
-    "Future|","CompletableFuture|","Path|","Files|","Instant|","Duration|",
-    "LocalDate|","LocalTime|","LocalDateTime|","ZonedDateTime|","Period|",
-    
-    /* Java Built-in Functions (HL_KEYWORD3) */
-    "System||","out||","in||","err||","println||","print||","printf||",
-    "format||","valueOf||","toString||","equals||","hashCode||","compareTo||",
-    "length||","size||","get||","set||","put||","remove||","add||","contains||",
-    "stream||","forEach||","map||","filter||","reduce||","collect||","sorted||",
-    "of||","join||","split||","replace||","substring||","parseInt||","parseDouble||",
-    /* Common Classes */
-    "String||","Integer||","Double||","Float||","Boolean||","Character||",
-    "Math||","Scanner||","Arrays||","Collections||","List||","Map||","Set||",
-    "Optional||","Stream||","Files||","Paths||","Pattern||","Matcher||",
-    /* Exceptions */
-    "Exception||","RuntimeException||","IOException||","SQLException||",
-    "NullPointerException||","IllegalArgumentException||","ClassNotFoundException||",
-    "IndexOutOfBoundsException||","NumberFormatException||","ArithmeticException||",
-    "UnsupportedOperationException||","ConcurrentModificationException||",
-    NULL
-};
-
-/* ========================= Markdown Syntax Highlighting ========================= */
-
-char *Markdown_HL_extensions[] = {".md",".markdown",".mdown",".mkd",".mkdn",NULL};
-char *Markdown_HL_keywords[] = {
-    /* Markdown Headers (HL_KEYWORD1) */
-    "#","##","###","####","#####","######",
-    
-    /* Markdown Emphasis and Formatting (HL_KEYWORD2) */
-    "**|","__","*|","_|","`|","```|","~~|","==|",
-    "***|","___","^|","~|",
-    
-    /* Markdown Code Blocks and Languages (HL_KEYWORD2) */
-    "```c|","```cpp|","```python|","```javascript|","```typescript|",
-    "```html|","```css|","```java|","```rust|","```go|","```php|",
-    "```ruby|","```swift|","```kotlin|","```scala|","```shell|",
-    "```bash|","```sql|","```json|","```xml|","```yaml|","```toml|",
-    "```dockerfile|","```makefile|","```lua|","```perl|","```r|",
-    "```matlab|","```latex|","```markdown|","```diff|","```vim|",
-    
-    /* Markdown Links, Images, and References (HL_KEYWORD3) */
-    "http://||","https://||","ftp://||","mailto://||","file://||",
-    "www.||","[||","]||","(||",")||","<||",">||","![||",
-    
-    /* Markdown Lists and Structure (HL_KEYWORD3) */
-    "-||","+||","*||","1.||","2.||","3.||","4.||","5.||","6.||",
-    "7.||","8.||","9.||","10.||",">||",">>||",">>>||",
-    
-    /* Markdown Tables and Separators (HL_KEYWORD3) */
-    "||","---||","***||","___||",":::||","---|",":-:|",":--|","--:|",
-    
-    /* Markdown Task Lists (HL_KEYWORD3) */
-    "- [ ]||","- [x]||","- [X]||","+ [ ]||","+ [x]||","+ [X]||",
-    "* [ ]||","* [x]||","* [X]||",
-    
-    /* Markdown Footnotes and References (HL_KEYWORD3) */
-    "[^||","^]||","[1]||","[2]||","[3]||","[4]||","[5]||",
-    
-    /* Markdown HTML Tags (HL_KEYWORD3) */
-    "<br>||","<hr>||","<div>||","</div>||","<span>||","</span>||",
-    "<p>||","</p>||","<pre>||","</pre>||","<code>||","</code>||",
-    "<kbd>||","</kbd>||","<sub>||","</sub>||","<sup>||","</sup>||",
-    "<mark>||","</mark>||","<del>||","</del>||","<ins>||","</ins>||",
-    
-    /* Markdown Metadata and Front Matter (HL_KEYWORD3) */
-    "---||","+++||","title:||","author:||","date:||","tags:||",
-    "categories:||","description:||","draft:||","slug:||","weight:||",
-    "layout:||","template:||","permalink:||","published:||","updated:||",
-    
-    /* Common Markdown Keywords and Annotations (HL_KEYWORD3) */
-    "TODO||","FIXME||","NOTE||","WARNING||","IMPORTANT||","DANGER||",
-    "TIP||","INFO||","BUG||","HACK||","REVIEW||","OPTIMIZE||",
-    "DEPRECATED||","REMOVED||","ADDED||","CHANGED||","SECURITY||",
-    
-    /* Mathematical Notation (HL_KEYWORD3) */
-    "$$||","$||","\\(||","\\)||","\\[||","\\]||","\\begin||","\\end||",
-    
-    /* Markdown Extensions (HL_KEYWORD3) */
-    ":::||","!!!||","???||","!!!note||","!!!warning||","!!!danger||",
-    "!!!tip||","!!!info||","!!!example||","!!!quote||","!!!success||",
-    "!!!failure||","!!!bug||","!!!abstract||","!!!summary||",
-    
-    /* Mermaid Diagrams (HL_KEYWORD3) */
-    "```mermaid||","graph||","flowchart||","sequenceDiagram||","classDiagram||",
-    "stateDiagram||","gantt||","pie||","journey||","gitgraph||",
-    
-    /* Common File Extensions in Code Blocks (HL_KEYWORD2) */
-    "```txt|","```log|","```ini|","```conf|","```cfg|","```properties|",
-    "```env|","```gitignore|","```gitattributes|","```editorconfig|",
-    "```tsconfig|","```webpack|","```package|","```composer|","```gemfile|",
-    "```requirements|","```poetry|","```cargo|","```gradle|","```maven|",
-    
-    /* Markdown Link Definitions (HL_KEYWORD3) */
-    "[def]:||","[link]:||","[image]:||","[reference]:||","[anchor]:||",
-    
-    /* Admonition Types (HL_KEYWORD3) */
-    "!!! note||","!!! warning||","!!! danger||","!!! tip||","!!! info||",
-    "!!! example||","!!! quote||","!!! success||","!!! failure||",
-    "!!! bug||","!!! abstract||","!!! summary||","!!! question||",
-    
-    NULL
-};
-
-/* ========================= LaTeX Syntax Highlighting ========================= */
-
-char *LaTeX_HL_extensions[] = {".tex",".latex",".sty",".cls",".bib",NULL};
-char *LaTeX_HL_keywords[] = {
-    /* LaTeX Document Structure Commands (HL_KEYWORD1) */
-    "\\documentclass","\\usepackage","\\begin","\\end","\\section",
-    "\\subsection","\\subsubsection","\\paragraph","\\subparagraph",
-    "\\chapter","\\part","\\title","\\author","\\date","\\thanks",
-    "\\maketitle","\\tableofcontents","\\listoffigures","\\listoftables",
-    "\\bibliography","\\bibliographystyle","\\cite","\\nocite","\\bibitem",
-    "\\appendix","\\frontmatter","\\mainmatter","\\backmatter",
-    "\\include","\\input","\\includeonly","\\includegraphics",
-    
-    /* LaTeX Page Layout Commands (HL_KEYWORD1) */
-    "\\newpage","\\clearpage","\\cleardoublepage","\\pagebreak","\\nopagebreak",
-    "\\newline","\\linebreak","\\nolinebreak","\\\\","\\hfill","\\vfill",
-    "\\hspace","\\vspace","\\hskip","\\vskip","\\smallskip","\\medskip","\\bigskip",
-    "\\indent","\\noindent","\\par","\\parskip","\\parindent","\\baselineskip",
-    "\\linespread","\\onehalfspacing","\\doublespacing","\\singlespacing",
-    "\\pagestyle","\\thispagestyle","\\pagenumbering","\\setcounter",
-    "\\addtocounter","\\stepcounter","\\refstepcounter","\\value",
-    
-    /* LaTeX Environments (HL_KEYWORD2) */
-    "document|","figure|","table|","equation|","align|","align*|","eqnarray|",
-    "eqnarray*|","gather|","gather*|","multline|","multline*|","split|",
-    "itemize|","enumerate|","description|","list|","trivlist|","quote|",
-    "quotation|","verse|","verbatim|","verbatim*|","flushleft|","flushright|",
-    "center|","abstract|","titlepage|","thebibliography|","theindex|",
-    "minipage|","parbox|","picture|","tabbing|","tabular|","tabular*|",
-    "array|","matrix|","pmatrix|","bmatrix|","vmatrix|","Vmatrix|",
-    "cases|","proof|","theorem|","lemma|","corollary|","proposition|",
-    "definition|","example|","remark|","note|","problem|","solution|",
-    "algorithmic|","algorithm|","lstlisting|","minted|","longtable|",
-    "sidewaystable|","sidewaysfigure|","multicols|","subequations|",
-    "subfigure|","subtable|","tikzpicture|","pgfpicture|","forest|",
-    
-    /* LaTeX Math Commands and Symbols (HL_KEYWORD3) */
-    "\\frac||","\\dfrac||","\\tfrac||","\\cfrac||","\\binom||","\\sqrt||",
-    "\\sum||","\\prod||","\\int||","\\iint||","\\iiint||","\\oint||",
-    "\\lim||","\\sup||","\\inf||","\\max||","\\min||","\\arg||",
-    "\\sin||","\\cos||","\\tan||","\\sec||","\\csc||","\\cot||",
-    "\\arcsin||","\\arccos||","\\arctan||","\\sinh||","\\cosh||","\\tanh||",
-    "\\log||","\\lg||","\\ln||","\\exp||","\\det||","\\gcd||","\\deg||",
-    "\\dim||","\\ker||","\\hom||","\\Pr||","\\mod||","\\pmod||","\\bmod||",
-    
-    /* Greek Letters */
-    "\\alpha||","\\beta||","\\gamma||","\\delta||","\\epsilon||","\\varepsilon||",
-    "\\zeta||","\\eta||","\\theta||","\\vartheta||","\\iota||","\\kappa||",
-    "\\lambda||","\\mu||","\\nu||","\\xi||","\\pi||","\\varpi||","\\rho||",
-    "\\varrho||","\\sigma||","\\varsigma||","\\tau||","\\upsilon||","\\phi||",
-    "\\varphi||","\\chi||","\\psi||","\\omega||","\\Gamma||","\\Delta||",
-    "\\Theta||","\\Lambda||","\\Xi||","\\Pi||","\\Sigma||","\\Upsilon||",
-    "\\Phi||","\\Psi||","\\Omega||",
-    
-    /* Math Operators and Relations */
-    "\\pm||","\\mp||","\\times||","\\div||","\\cdot||","\\bullet||",
-    "\\circ||","\\ast||","\\star||","\\dagger||","\\ddagger||","\\amalg||",
-    "\\cap||","\\cup||","\\uplus||","\\sqcap||","\\sqcup||","\\wedge||",
-    "\\vee||","\\setminus||","\\wr||","\\diamond||","\\bigtriangleup||",
-    "\\bigtriangledown||","\\triangleleft||","\\triangleright||","\\lhd||",
-    "\\rhd||","\\unlhd||","\\unrhd||","\\oplus||","\\ominus||","\\otimes||",
-    "\\oslash||","\\odot||","\\bigcirc||","\\bigodot||","\\bigoplus||",
-    "\\bigotimes||","\\biguplus||","\\bigwedge||","\\bigvee||","\\bigcap||",
-    "\\bigcup||","\\bigsqcup||",
-    
-    /* Relations */
-    "\\leq||","\\geq||","\\equiv||","\\models||","\\prec||","\\succ||",
-    "\\sim||","\\perp||","\\preceq||","\\succeq||","\\simeq||","\\mid||",
-    "\\ll||","\\gg||","\\asymp||","\\parallel||","\\subset||","\\supset||",
-    "\\approx||","\\bowtie||","\\subseteq||","\\supseteq||","\\cong||",
-    "\\neq||","\\smile||","\\sqsubseteq||","\\sqsupseteq||","\\doteq||",
-    "\\frown||","\\in||","\\ni||","\\propto||","\\vdash||","\\dashv||",
-    "\\notin||","\\not||","\\exists||","\\nexists||","\\forall||",
-    
-    /* Arrows */
-    "\\leftarrow||","\\rightarrow||","\\uparrow||","\\downarrow||",
-    "\\leftrightarrow||","\\updownarrow||","\\Leftarrow||","\\Rightarrow||",
-    "\\Uparrow||","\\Downarrow||","\\Leftrightarrow||","\\Updownarrow||",
-    "\\mapsto||","\\longmapsto||","\\hookleftarrow||","\\hookrightarrow||",
-    "\\leftharpoonup||","\\leftharpoondown||","\\rightharpoonup||",
-    "\\rightharpoondown||","\\rightleftharpoons||","\\iff||","\\to||",
-    "\\gets||","\\longleftarrow||","\\longrightarrow||","\\longleftrightarrow||",
-    "\\Longleftarrow||","\\Longrightarrow||","\\Longleftrightarrow||",
-    "\\nearrow||","\\searrow||","\\swarrow||","\\nwarrow||",
-    
-    /* Delimiters */
-    "\\left||","\\right||","\\bigl||","\\bigr||","\\Bigl||","\\Bigr||",
-    "\\biggl||","\\biggr||","\\Biggl||","\\Biggr||","\\langle||","\\rangle||",
-    "\\lceil||","\\rceil||","\\lfloor||","\\rfloor||","\\ulcorner||",
-    "\\urcorner||","\\llcorner||","\\lrcorner||",
-    
-    /* Math Fonts and Styles */
-    "\\mathrm||","\\mathbf||","\\mathit||","\\mathsf||","\\mathtt||",
-    "\\mathcal||","\\mathfrak||","\\mathbb||","\\boldsymbol||","\\pmb||",
-    "\\text||","\\mbox||","\\hbox||","\\vbox||","\\makebox||","\\framebox||",
-    "\\fbox||","\\boxed||","\\underline||","\\overline||","\\widehat||",
-    "\\widetilde||","\\overleftarrow||","\\overrightarrow||","\\overleftrightarrow||",
-    "\\underleftarrow||","\\underrightarrow||","\\underleftrightarrow||",
-    "\\overbrace||","\\underbrace||","\\overset||","\\underset||",
-    
-    /* Spacing Commands */
-    "\\quad||","\\qquad||","\\,||","\\:||","\\;||","\\!||","\\enspace||",
-    "\\thinspace||","\\negthickspace||","\\negthinspace||","\\negmedspace||",
-    "\\phantom||","\\vphantom||","\\hphantom||","\\smash||","\\mathstrut||",
-    "\\strut||","\\rule||","\\hline||","\\cline||","\\vline||",
-    
-    /* Text Formatting Commands */
-    "\\textbf||","\\textit||","\\textsl||","\\textsc||","\\texttt||",
-    "\\textsf||","\\textrm||","\\textup||","\\textmd||","\\emph||",
-    "\\em||","\\bf||","\\it||","\\sl||","\\sc||","\\tt||","\\sf||",
-    "\\rm||","\\up||","\\md||","\\normalfont||","\\cal||","\\mit||",
-    
-    /* Font Size Commands */
-    "\\tiny||","\\scriptsize||","\\footnotesize||","\\small||","\\normalsize||",
-    "\\large||","\\Large||","\\LARGE||","\\huge||","\\Huge||",
-    
-    /* Alignment and Positioning */
-    "\\centering||","\\raggedright||","\\raggedleft||","\\raggedleft||",
-    "\\flushleft||","\\flushright||","\\center||","\\justify||",
-    "\\hfil||","\\hfill||","\\hfilneg||","\\vfil||","\\vfill||","\\vfilneg||",
-    "\\stretch||","\\dotfill||","\\hrulefill||","\\leaders||","\\cleaders||",
-    
-    /* Cross-references and Citations */
-    "\\label||","\\ref||","\\pageref||","\\eqref||","\\autoref||",
-    "\\nameref||","\\hyperref||","\\cite||","\\citep||","\\citet||",
-    "\\citeauthor||","\\citeyear||","\\citealt||","\\citealp||",
-    "\\citetext||","\\bibentry||","\\fullcite||","\\footcite||",
-    "\\textcite||","\\parencite||","\\smartcite||","\\autocite||",
-    
-    /* Footnotes and Marginalia */
-    "\\footnote||","\\footnotemark||","\\footnotetext||","\\marginpar||",
-    "\\marginparpush||","\\marginnote||","\\sidenote||","\\sidenotemark||",
-    "\\sidenotetext||","\\footnotesize||","\\footnoterule||",
-    
-    /* Lists and Numbering */
-    "\\item||","\\setlength||","\\addtolength||","\\settowidth||",
-    "\\settoheight||","\\settodepth||","\\usecounter||","\\newcounter||",
-    "\\arabic||","\\roman||","\\Roman||","\\alph||","\\Alph||",
-    "\\fnsymbol||","\\labelitemi||","\\labelitemii||","\\labelitemiii||",
-    "\\labelitemiv||","\\labelenumi||","\\labelenumii||","\\labelenumiii||",
-    "\\labelenumiv||","\\theenumi||","\\theenumii||","\\theenumiii||",
-    "\\theenumiv||","\\theitemi||","\\theitemii||","\\theitemiii||",
-    "\\theitemiv||",
-    
-    /* Boxes and Frames */
-    "\\fbox||","\\framebox||","\\makebox||","\\parbox||","\\minipage||",
-    "\\raisebox||","\\savebox||","\\sbox||","\\usebox||","\\newsavebox||",
-    "\\colorbox||","\\fcolorbox||","\\shadowbox||","\\doublebox||",
-    "\\ovalbox||","\\Ovalbox||","\\roundedbox||","\\dashedbox||",
-    
-    /* Tables and Arrays */
-    "\\multicolumn||","\\multirow||","\\cline||","\\hline||","\\toprule||",
-    "\\midrule||","\\bottomrule||","\\addlinespace||","\\morecmidrules||",
-    "\\specialrule||","\\cmidrule||","\\arrayrulewidth||","\\arraycolsep||",
-    "\\tabcolsep||","\\arraystretch||","\\extrarowheight||","\\belowrulesep||",
-    "\\aboverulesep||","\\doublerulesep||","\\heavyrulewidth||",
-    "\\lightrulewidth||","\\cmidrulewidth||","\\abovetopsep||","\\belowbottomsep||",
-    
-    /* Graphics and Figures */
-    "\\includegraphics||","\\graphicspath||","\\DeclareGraphicsExtensions||",
-    "\\rotatebox||","\\scalebox||","\\resizebox||","\\reflectbox||",
-    "\\caption||","\\subcaption||","\\captionof||","\\listoffigures||",
-    "\\listoftables||","\\newfloat||","\\floatname||","\\floatplacement||",
-    "\\suppressfloats||","\\clearpage||","\\afterpage||","\\FloatBarrier||",
-    
-    /* Colors */
-    "\\color||","\\textcolor||","\\colorbox||","\\fcolorbox||",
-    "\\pagecolor||","\\definecolor||","\\colorlet||","\\xcolor||",
-    
-    /* Hyperlinks and URLs */
-    "\\href||","\\url||","\\hyperlink||","\\hypertarget||","\\hypersetup||",
-    "\\autoref||","\\nameref||","\\hyperref||","\\nolinkurl||",
-    
-    /* Special Characters and Symbols */
-    "\\LaTeX||","\\TeX||","\\&||","\\%||","\\#||","\\$||","\\{||","\\}||",
-    "\\textbackslash||","\\textasciicircum||","\\textasciitilde||",
-    "\\textbar||","\\textless||","\\textgreater||","\\textunderscore||",
-    "\\textregistered||","\\texttrademark||","\\textcopyright||",
-    "\\textdegree||","\\textcelsius||","\\textmu||","\\textohm||",
-    "\\texteuro||","\\textsterling||","\\textyen||","\\textcent||",
-    "\\textflorin||","\\textpound||","\\textdollar||","\\textquotedblleft||",
-    "\\textquotedblright||","\\textquoteleft||","\\textquoteright||",
-    "\\guillemotleft||","\\guillemotright||","\\quotedblbase||","\\quotesinglbase||",
-    "\\textellipsis||","\\textendash||","\\textemdash||","\\textvisiblespace||",
-    
-    /* Math Accents and Decorations */
-    "\\hat||","\\check||","\\breve||","\\acute||","\\grave||","\\tilde||",
-    "\\bar||","\\vec||","\\dot||","\\ddot||","\\dddot||","\\ddddot||",
-    "\\mathring||","\\widehat||","\\widetilde||","\\widecheck||",
-    "\\widebreve||","\\widebar||","\\widevec||",
-    
-    /* Theorem-like Environments */
-    "\\newtheorem||","\\theoremstyle||","\\newtheoremstyle||","\\qed||",
-    "\\qedsymbol||","\\proof||","\\endproof||","\\proofname||",
-    
-    /* Special Math Constants */
-    "\\infty||","\\partial||","\\nabla||","\\Box||","\\Diamond||",
-    "\\triangle||","\\angle||","\\measuredangle||","\\sphericalangle||",
-    "\\top||","\\bot||","\\flat||","\\natural||","\\sharp||",
-    "\\clubsuit||","\\diamondsuit||","\\heartsuit||","\\spadesuit||",
-    "\\Re||","\\Im||","\\wp||","\\ell||","\\hbar||","\\imath||","\\jmath||",
-    "\\aleph||","\\beth||","\\gimel||","\\daleth||","\\backslash||",
-    "\\prime||","\\emptyset||","\\varnothing||","\\complement||",
-    
-    /* Units and Measurements (if using siunitx) */
-    "\\si||","\\SI||","\\num||","\\ang||","\\unit||","\\qty||",
-    "\\qtyrange||","\\qtylist||","\\numrange||","\\numlist||",
-    "\\sisetup||","\\DeclareSIUnit||","\\DeclareSIPrefix||",
-    
-    /* Chemistry (if using mhchem) */
-    "\\ce||","\\cee||","\\cf||","\\cfe||","\\isotope||",
-    
-    /* Algorithms and Code */
-    "\\algorithm||","\\algstore||","\\algrestore||","\\algorithmic||",
-    "\\State||","\\Statex||","\\Require||","\\Ensure||","\\While||",
-    "\\EndWhile||","\\For||","\\EndFor||","\\If||","\\ElsIf||","\\Else||",
-    "\\EndIf||","\\Function||","\\EndFunction||","\\Procedure||",
-    "\\EndProcedure||","\\Call||","\\Comment||","\\Return||",
-    "\\lstset||","\\lstinline||","\\lstinputlisting||","\\lstlistoflistings||",
-    "\\mintinline||","\\inputminted||","\\usemintedstyle||",
-    
-    /* Bibliography and Index */
-    "\\printbibliography||","\\addbibresource||","\\bibliography||",
-    "\\bibliographystyle||","\\thebibliography||","\\bibitem||",
-    "\\newblock||","\\index||","\\makeindex||","\\printindex||",
-    "\\indexentry||","\\see||","\\seealso||",
-    
-    /* Miscellaneous Commands */
-    "\\newcommand||","\\renewcommand||","\\providecommand||","\\def||",
-    "\\newenvironment||","\\renewenvironment||","\\newlength||",
-    "\\newdimen||","\\newskip||","\\newmuskip||","\\newbox||",
-    "\\newtoks||","\\newread||","\\newwrite||","\\newcount||",
-    "\\newfam||","\\newif||","\\csname||","\\endcsname||",
-    "\\expandafter||","\\noexpand||","\\protect||","\\string||",
-    "\\meaning||","\\the||","\\number||","\\romannumeral||",
-    "\\jobname||","\\today||","\\TeX||","\\LaTeX||","\\LaTeXe||",
-    
-    NULL
-};
-
-/* Here we define an array of syntax highlights by extensions, keywords,
- * comments delimiters and flags. */
-struct editorSyntax HLDB[] = {
-    {
-        /* C / C++ */
-        C_HL_extensions,
-        C_HL_keywords,
-        "//","/*","*/",
-        HL_HIGHLIGHT_STRINGS | HL_HIGHLIGHT_NUMBERS
-    },
-    {
-        /* Python */
-        Python_HL_extensions,
-        Python_HL_keywords,
-        "#","","",
-        HL_HIGHLIGHT_STRINGS | HL_HIGHLIGHT_NUMBERS
-    },
-    {
-        /* JavaScript */
-        JS_HL_extensions,
-        JS_HL_keywords,
-        "//","/*","*/",
-        HL_HIGHLIGHT_STRINGS | HL_HIGHLIGHT_NUMBERS
-    },
-    {
-        /* TypeScript */
-        TS_HL_extensions,
-        TS_HL_keywords,
-        "//","/*","*/",
-        HL_HIGHLIGHT_STRINGS | HL_HIGHLIGHT_NUMBERS
-    },
-    {
-        /* HTML */
-        HTML_HL_extensions,
-        HTML_HL_keywords,
-        "","<!--","-->",
-        HL_HIGHLIGHT_STRINGS
-    },
-    {
-        /* CSS */
-        CSS_HL_extensions,
-        CSS_HL_keywords,
-        "","/*","*/",
-        HL_HIGHLIGHT_STRINGS | HL_HIGHLIGHT_NUMBERS
-    },
-    {
-        /* Lua */
-        Lua_HL_extensions,
-        Lua_HL_keywords,
-        "--","--[[","]]",
-        HL_HIGHLIGHT_STRINGS | HL_HIGHLIGHT_NUMBERS
-    },
-    {
-        /* Go */
-        Go_HL_extensions,
-        Go_HL_keywords,
-        "//","/*","*/",
-        HL_HIGHLIGHT_STRINGS | HL_HIGHLIGHT_NUMBERS
-    },
-    {
-        /* Rust */
-        Rust_HL_extensions,
-        Rust_HL_keywords,
-        "//","/*","*/",
-        HL_HIGHLIGHT_STRINGS | HL_HIGHLIGHT_NUMBERS
-    },
-    {
-        /* Java */
-        Java_HL_extensions,
-        Java_HL_keywords,
-        "//","/*","*/",
-        HL_HIGHLIGHT_STRINGS | HL_HIGHLIGHT_NUMBERS
-    },
-    {
-        /* Markdown */
-        Markdown_HL_extensions,
-        Markdown_HL_keywords,
-        "","<!--","-->",
-        HL_HIGHLIGHT_STRINGS
-    },
-    {
-        /* LaTeX */
-        LaTeX_HL_extensions,
-        LaTeX_HL_keywords,
-        "%","","",
-        HL_HIGHLIGHT_STRINGS | HL_HIGHLIGHT_NUMBERS
-    }
-};
-
-#define HLDB_ENTRIES (sizeof(HLDB)/sizeof(HLDB[0]))
 
 /* ======================= Low level terminal handling ====================== */
 
-static struct termios orig_termios; /* In order to restore at exit.*/
+/* Platform-specific terminal state */
+#if XCODEX_WINDOWS
+static HANDLE hStdin, hStdout;
+static DWORD dwOriginalMode;
+static CONSOLE_SCREEN_BUFFER_INFO csbi;
+#endif
 
+#if XCODEX_POSIX
+static struct termios orig_termios; /* In order to restore at exit.*/
+#endif
+
+#if XCODEX_WINDOWS
+void disableRawMode(int fd) {
+    if (E.rawmode && hStdin != INVALID_HANDLE_VALUE) {
+        SetConsoleMode(hStdin, dwOriginalMode);
+        E.rawmode = 0;
+    }
+}
+#endif
+
+#if XCODEX_POSIX
 void disableRawMode(int fd) {
     /* Don't even check the return value as it's too late. */
     if (E.rawmode) {
@@ -1723,22 +1532,72 @@ void disableRawMode(int fd) {
         E.rawmode = 0;
     }
 }
+#endif
 
 /* Called at exit to avoid remaining in raw mode. */
 void editorAtExit(void) {
     disableRawMode(STDIN_FILENO);
+    /* Free yank buffer */
+    xcodex_free_yank_buffer();
+    /* Free undo system */
+    xcodex_free_undo_system();
     /* Reset background color */
     editorSetBackgroundColor(-1);
     /* Clear the screen and reposition cursor at top-left on exit. */
-    if (write(STDOUT_FILENO, "\x1b[2J", 4) == -1) {
+#if XCODEX_WINDOWS
+    DWORD written;
+    HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (hOut != INVALID_HANDLE_VALUE) {
+        WriteConsoleA(hOut, "\x1b[2J", 4, &written, NULL);
+        WriteConsoleA(hOut, "\x1b[H", 3, &written, NULL);
+    }
+#else
+    if (xcodex_write(STDOUT_FILENO, "\x1b[2J", 4) == -1) {
         perror("write");
     }
-    if (write(STDOUT_FILENO, "\x1b[H", 3) == -1) {
+    if (xcodex_write(STDOUT_FILENO, "\x1b[H", 3) == -1) {
         perror("write");
     }
+#endif
 }
 
-/* Raw mode: 1960 magic shit. */
+/* Raw mode: Cross-platform terminal control */
+#if XCODEX_WINDOWS
+int enableRawMode(int fd) {
+    if (E.rawmode) return 0;
+    
+    hStdin = GetStdHandle(STD_INPUT_HANDLE);
+    hStdout = GetStdHandle(STD_OUTPUT_HANDLE);
+    
+    if (hStdin == INVALID_HANDLE_VALUE || hStdout == INVALID_HANDLE_VALUE) {
+        return -1;
+    }
+    
+    if (!GetConsoleMode(hStdin, &dwOriginalMode)) {
+        return -1;
+    }
+    
+    DWORD dwMode = dwOriginalMode;
+    dwMode &= ~(ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT);
+    dwMode |= ENABLE_WINDOW_INPUT;  /* Enable window resize events */
+    
+    if (!SetConsoleMode(hStdin, dwMode)) {
+        return -1;
+    }
+    
+    /* Try to enable VT100 sequences for output (optional) */
+    DWORD dwOutMode;
+    if (GetConsoleMode(hStdout, &dwOutMode)) {
+        dwOutMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+        SetConsoleMode(hStdout, dwOutMode);  /* Don't fail if this doesn't work */
+    }
+    
+    E.rawmode = 1;
+    return 0;
+}
+#endif
+
+#if XCODEX_POSIX
 int enableRawMode(int fd) {
     struct termios raw;
 
@@ -1771,9 +1630,106 @@ fatal:
     errno = ENOTTY;
     return -1;
 }
+#endif
 
 /* Read a key from the terminal put in raw mode, trying to handle
  * escape sequences. */
+#if XCODEX_WINDOWS
+int editorReadKey(int fd) {
+    INPUT_RECORD irec;
+    DWORD events;
+    
+    while (1) {
+        /* Use ReadConsoleInput to get both key and window events */
+        if (!ReadConsoleInput(hStdin, &irec, 1, &events) || events == 0) {
+            Sleep(1);
+            continue;
+        }
+        
+        if (irec.EventType == KEY_EVENT && irec.Event.KeyEvent.bKeyDown) {
+            KEY_EVENT_RECORD keyEvent = irec.Event.KeyEvent;
+            
+            /* Handle special keys first */
+            switch (keyEvent.wVirtualKeyCode) {
+                case VK_ESCAPE:
+                    return ESC;
+                case VK_UP:
+                    return ARROW_UP;
+                case VK_DOWN:
+                    return ARROW_DOWN;
+                case VK_LEFT:
+                    return ARROW_LEFT;
+                case VK_RIGHT:
+                    return ARROW_RIGHT;
+                case VK_DELETE:
+                    return DEL_KEY;
+                case VK_HOME:
+                    return HOME_KEY;
+                case VK_END:
+                    return END_KEY;
+                case VK_PRIOR:  /* Page Up */
+                    return PAGE_UP;
+                case VK_NEXT:   /* Page Down */
+                    return PAGE_DOWN;
+                case VK_BACK:   /* Backspace */
+                    return BACKSPACE;
+                case VK_TAB:
+                    return TAB;
+                case VK_RETURN:
+                    return ENTER;
+                case VK_SPACE:
+                    return ' ';
+                default:
+                    /* Handle control keys */
+                    if (keyEvent.dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) {
+                        switch (keyEvent.wVirtualKeyCode) {
+                            case 'A': return CTRL_A;
+                            case 'B': return CTRL_B;
+                            case 'C': return CTRL_C;
+                            case 'D': return CTRL_D;
+                            case 'E': return CTRL_E;
+                            case 'F': return CTRL_F;
+                            case 'G': return CTRL_G;
+                            case 'H': return CTRL_H;
+                            case 'I': return CTRL_I;
+                            case 'J': return CTRL_J;
+                            case 'K': return CTRL_K;
+                            case 'L': return CTRL_L;
+                            case 'M': return CTRL_M;
+                            case 'N': return CTRL_N;
+                            case 'O': return CTRL_O;
+                            case 'P': return CTRL_P;
+                            case 'Q': return CTRL_Q;
+                            case 'R': return CTRL_R;
+                            case 'S': return CTRL_S;
+                            case 'T': return CTRL_T;
+                            case 'U': return CTRL_U;
+                            case 'V': return CTRL_V;
+                            case 'W': return CTRL_W;
+                            case 'X': return CTRL_X;
+                            case 'Y': return CTRL_Y;
+                            case 'Z': return CTRL_Z;
+                        }
+                    }
+                    
+                    /* Handle regular characters */
+                    if (keyEvent.uChar.AsciiChar != 0) {
+                        return keyEvent.uChar.AsciiChar;
+                    }
+                    break;
+            }
+        }
+        else if (irec.EventType == WINDOW_BUFFER_SIZE_EVENT) {
+            /* Handle window resize */
+            handleSigWinCh();
+        }
+    }
+    
+    return -1;
+}
+#endif
+
+#if XCODEX_POSIX
 int editorReadKey(int fd) {
     int nread;
     char c, seq[3];
@@ -1783,8 +1739,34 @@ int editorReadKey(int fd) {
     while(1) {
         switch(c) {
         case ESC:    /* escape sequence */
+            /* Use select() to implement timeout for ESC detection */
+            fd_set readfds;
+            struct timeval timeout;
+            
+            FD_ZERO(&readfds);
+            FD_SET(fd, &readfds);
+            timeout.tv_sec = 0;
+            timeout.tv_usec = 100000;  /* 100ms timeout */
+            
+            int ready = select(fd + 1, &readfds, NULL, NULL, &timeout);
+            if (ready <= 0) {
+                return ESC;  /* Timeout or error - this is a plain ESC */
+            }
+            
             /* If this is just an ESC, we'll timeout here. */
             if (read(fd,seq,1) == 0) return ESC;
+            
+            /* Check for second character with timeout */
+            FD_ZERO(&readfds);
+            FD_SET(fd, &readfds);
+            timeout.tv_sec = 0;
+            timeout.tv_usec = 100000;  /* 100ms timeout */
+            
+            ready = select(fd + 1, &readfds, NULL, NULL, &timeout);
+            if (ready <= 0) {
+                return ESC;  /* Timeout or error - this is a plain ESC */
+            }
+            
             if (read(fd,seq+1,1) == 0) return ESC;
 
             /* ESC [ sequences. */
@@ -1824,10 +1806,30 @@ int editorReadKey(int fd) {
         }
     }
 }
+#endif
 
 /* Use the ESC [6n escape sequence to query the horizontal cursor position
  * and return it. On error -1 is returned, on success the position of the
  * cursor is stored at *rows and *cols and 0 is returned. */
+#if XCODEX_WINDOWS
+int getCursorPosition(int ifd, int ofd, int *rows, int *cols) {
+    CONSOLE_SCREEN_BUFFER_INFO csbi;
+    HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+    
+    if (hOut == INVALID_HANDLE_VALUE) {
+        return -1;
+    }
+    
+    if (GetConsoleScreenBufferInfo(hOut, &csbi)) {
+        *cols = csbi.dwCursorPosition.X + 1;
+        *rows = csbi.dwCursorPosition.Y + 1;
+        return 0;
+    }
+    return -1;
+}
+#endif
+
+#if XCODEX_POSIX
 int getCursorPosition(int ifd, int ofd, int *rows, int *cols) {
     char buf[32];
     unsigned int i = 0;
@@ -1848,10 +1850,30 @@ int getCursorPosition(int ifd, int ofd, int *rows, int *cols) {
     if (sscanf(buf+2,"%d;%d",rows,cols) != 2) return -1;
     return 0;
 }
+#endif
 
 /* Try to get the number of columns in the current terminal. If the ioctl()
  * call fails the function will try to query the terminal itself.
  * Returns 0 on success, -1 on error. */
+#if XCODEX_WINDOWS
+int getWindowSize(int ifd, int ofd, int *rows, int *cols) {
+    CONSOLE_SCREEN_BUFFER_INFO csbi;
+    HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+    
+    if (hOut == INVALID_HANDLE_VALUE) {
+        return -1;
+    }
+    
+    if (GetConsoleScreenBufferInfo(hOut, &csbi)) {
+        *cols = csbi.srWindow.Right - csbi.srWindow.Left + 1;
+        *rows = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
+        return 0;
+    }
+    return -1;
+}
+#endif
+
+#if XCODEX_POSIX
 int getWindowSize(int ifd, int ofd, int *rows, int *cols) {
     struct winsize ws;
 
@@ -1884,6 +1906,7 @@ int getWindowSize(int ifd, int ofd, int *rows, int *cols) {
 failed:
     return -1;
 }
+#endif
 
 /* ====================== Syntax highlight color scheme  ==================== */
 
@@ -2107,13 +2130,13 @@ void editorSelectSyntaxHighlight(char *filename) {
 void editorSetBackgroundColor(int color) {
     if (color == -1) {
         /* Reset to default background */
-        write(STDOUT_FILENO, "\x1b[49m\x1b[2J\x1b[H", 12);
+        xcodex_write(STDOUT_FILENO, "\x1b[49m\x1b[2J\x1b[H", 12);
     } else {
         /* Set 256-color background */
         char bg_buf[32];
         int len = snprintf(bg_buf, sizeof(bg_buf), "\x1b[48;5;%dm\x1b[2J\x1b[H", color);
         if (len > 0 && len < sizeof(bg_buf)) {
-            write(STDOUT_FILENO, bg_buf, len);
+            xcodex_write(STDOUT_FILENO, bg_buf, len);
         }
     }
 }
@@ -2205,6 +2228,10 @@ void editorUpdateRow(erow *row) {
  * if required. */
 void editorInsertRow(int at, char *s, size_t len) {
     if (at < 0 || at > E.numrows || !s) return;
+    
+    /* Track undo for line insertion */
+    xcodex_push_undo(UNDO_INSERT_LINE, at, 0, NULL, 0);
+    
     E.row = realloc(E.row,sizeof(erow)*(E.numrows+1));
     if (!E.row) {
         printf("Out of memory!\n");
@@ -2254,6 +2281,10 @@ void editorDelRow(int at) {
 
     if (at < 0 || at >= E.numrows) return;
     row = E.row+at;
+    
+    /* Track undo for line deletion */
+    xcodex_push_undo(UNDO_DELETE_LINE, at, 0, row->chars, row->size);
+    
     editorFreeRow(row);
     memmove(E.row+at,E.row+at+1,sizeof(E.row[0])*(E.numrows-at-1));
     for (int j = at; j < E.numrows-1; j++) E.row[j].idx++;
@@ -2271,16 +2302,36 @@ char *editorRowsToString(int *buflen) {
     int totlen = 0;
     int j;
 
+    if (!buflen) return NULL;
+
     /* Compute count of bytes */
-    for (j = 0; j < E.numrows; j++)
-        totlen += E.row[j].size+1; /* +1 is for "\n" at end of every row */
+    for (j = 0; j < E.numrows; j++) {
+        if (E.row[j].size >= 0) {
+            totlen += E.row[j].size+1; /* +1 is for "\n" at end of every row */
+        }
+    }
     *buflen = totlen;
+    
+    if (totlen == 0) {
+        /* Empty file */
+        buf = malloc(1);
+        if (buf) buf[0] = '\0';
+        return buf;
+    }
+    
     totlen++; /* Also make space for nulterm */
 
     p = buf = malloc(totlen);
+    if (!buf) {
+        *buflen = 0;
+        return NULL;
+    }
+    
     for (j = 0; j < E.numrows; j++) {
-        memcpy(p,E.row[j].chars,E.row[j].size);
-        p += E.row[j].size;
+        if (E.row[j].chars && E.row[j].size > 0) {
+            memcpy(p,E.row[j].chars,E.row[j].size);
+            p += E.row[j].size;
+        }
         *p = '\n';
         p++;
     }
@@ -2355,6 +2406,10 @@ void editorInsertChar(int c) {
             editorInsertRow(E.numrows,"",0);
     }
     row = &E.row[filerow];
+    
+    /* Track undo for character insertion */
+    xcodex_push_undo(UNDO_INSERT_CHAR, filerow, filecol, NULL, 0);
+    
     editorRowInsertChar(row,filecol,c);
     if (E.cx == effective_screencols-1)
         E.coloff++;
@@ -2384,6 +2439,9 @@ void editorInsertNewline(void) {
         editorInsertRow(filerow,"",0);
     } else {
         /* We are in the middle of a line. Split it between two rows. */
+        /* Track undo for line split operation */
+        xcodex_push_undo(UNDO_SPLIT_LINE, filerow, filecol, NULL, 0);
+        
         editorInsertRow(filerow+1,row->chars+filecol,row->size-filecol);
         row = &E.row[filerow];
         row->chars[filecol] = '\0';
@@ -2410,6 +2468,11 @@ void editorDelChar(void) {
     if (filecol == 0) {
         /* Handle the case of column 0, we need to move the current line
          * on the right of the previous one. */
+        
+        /* Track undo for line join operation */
+        xcodex_push_undo(UNDO_JOIN_LINE, filerow-1, E.row[filerow-1].size, 
+                        row->chars, row->size);
+        
         filecol = E.row[filerow-1].size;
         editorRowAppendString(&E.row[filerow-1],row->chars,row->size);
         editorDelRow(filerow);
@@ -2425,6 +2488,10 @@ void editorDelChar(void) {
             E.coloff += shift;
         }
     } else {
+        /* Track undo for character deletion */
+        char deleted_char = row->chars[filecol-1];
+        xcodex_push_undo(UNDO_DELETE_CHAR, filerow, filecol-1, &deleted_char, 1);
+        
         editorRowDelChar(row,filecol-1);
         if (E.cx == 0 && E.coloff)
             E.coloff--;
@@ -2440,10 +2507,19 @@ void editorDelChar(void) {
 int editorOpen(char *filename) {
     FILE *fp;
 
+    if (!filename) {
+        editorSetStatusMessage("No filename provided");
+        return 1;
+    }
+
     E.dirty = 0;
     free(E.filename);
     size_t fnlen = strlen(filename)+1;
     E.filename = malloc(fnlen);
+    if (!E.filename) {
+        editorSetStatusMessage("Out of memory");
+        return 1;
+    }
     memcpy(E.filename,filename,fnlen);
 
     fp = fopen(filename,"r");
@@ -2452,39 +2528,63 @@ int editorOpen(char *filename) {
             perror("Opening file");
             exit(1);
         }
+        editorSetStatusMessage("New file: %s", filename);
         return 1;
     }
 
     char *line = NULL;
     size_t linecap = 0;
     ssize_t linelen;
+    int line_count = 0;
+    
     while((linelen = getline(&line,&linecap,fp)) != -1) {
         if (linelen && (line[linelen-1] == '\n' || line[linelen-1] == '\r'))
             line[--linelen] = '\0';
         editorInsertRow(E.numrows,line,linelen);
+        line_count++;
+        
+        /* Prevent loading extremely large files that might cause memory issues */
+        if (line_count > 100000) {
+            editorSetStatusMessage("File too large (>100k lines), truncated");
+            break;
+        }
     }
+    
     free(line);
     fclose(fp);
     E.dirty = 0;
+    editorSetStatusMessage("Loaded %d lines from %s", line_count, filename);
     return 0;
 }
 
 /* Save the current file on disk. Return 0 on success, 1 on error. */
 int editorSave(void) {
+    if (!E.filename) {
+        editorSetStatusMessage("No filename specified");
+        return 1;
+    }
+    
     int len;
     char *buf = editorRowsToString(&len);
+    if (!buf) {
+        editorSetStatusMessage("Failed to serialize file content");
+        return 1;
+    }
+    
     int fd = open(E.filename,O_RDWR|O_CREAT,0644);
     if (fd == -1) goto writeerr;
 
     /* Use truncate + a single write(2) call in order to make saving
      * a bit safer, under the limits of what we can do in a small editor. */
     if (ftruncate(fd,len) == -1) goto writeerr;
-    if (write(fd,buf,len) != len) goto writeerr;
+    
+    ssize_t written = write(fd,buf,len);
+    if (written != len) goto writeerr;
 
     close(fd);
     free(buf);
     E.dirty = 0;
-    editorSetStatusMessage("%d bytes written on disk", len);
+    editorSetStatusMessage("%d bytes written to %s", len, E.filename);
     return 0;
 
 writeerr:
@@ -2499,20 +2599,76 @@ writeerr:
 #define ABUF_INIT {NULL,0}
 
 void abAppend(struct abuf *ab, const char *s, int len) {
+    if (!ab || !s || len <= 0) return;
+    
     char *new = realloc(ab->b,ab->len+len);
-
-    if (new == NULL) return;
+    if (new == NULL) {
+        /* Out of memory - could not append */
+        return;
+    }
+    
     memcpy(new+ab->len,s,len);
     ab->b = new;
     ab->len += len;
 }
 
 void abFree(struct abuf *ab) {
-    free(ab->b);
+    if (ab) {
+        free(ab->b);
+        ab->b = NULL;
+        ab->len = 0;
+    }
 }
 
 /* This function writes the whole screen using VT100 escape characters
  * starting from the logical state of the editor in the global state 'E'. */
+/* Check if a position is within visual selection */
+int xcodex_is_in_visual_selection(int file_row, int file_col) {
+    if (E.mode != XCODEX_MODE_VISUAL && E.mode != XCODEX_MODE_VISUAL_LINE && E.mode != XCODEX_MODE_VISUAL_BLOCK) {
+        return 0;
+    }
+    
+    /* Convert screen coordinates to file coordinates */
+    int start_row = E.rowoff + E.visual_start_row;
+    int start_col = E.coloff + E.visual_start_col;
+    int end_row = E.rowoff + E.visual_end_row;
+    int end_col = E.coloff + E.visual_end_col;
+    
+    /* Normalize selection (start should be before end) */
+    if (start_row > end_row || (start_row == end_row && start_col > end_col)) {
+        int temp = start_row;
+        start_row = end_row;
+        end_row = temp;
+        temp = start_col;
+        start_col = end_col;
+        end_col = temp;
+    }
+    
+    if (E.mode == XCODEX_MODE_VISUAL_LINE) {
+        /* Line-wise selection */
+        return (file_row >= start_row && file_row <= end_row);
+    } else if (E.mode == XCODEX_MODE_VISUAL_BLOCK) {
+        /* Block-wise selection */
+        return (file_row >= start_row && file_row <= end_row && 
+                file_col >= start_col && file_col <= end_col);
+    } else {
+        /* Character-wise selection */
+        if (file_row < start_row || file_row > end_row) {
+            return 0;
+        }
+        if (file_row == start_row && file_row == end_row) {
+            return (file_col >= start_col && file_col <= end_col);
+        }
+        if (file_row == start_row) {
+            return (file_col >= start_col);
+        }
+        if (file_row == end_row) {
+            return (file_col <= end_col);
+        }
+        return 1;  /* Middle rows are fully selected */
+    }
+}
+
 void editorRefreshScreen(void) {
     int y;
     erow *r;
@@ -2672,9 +2828,16 @@ void editorRefreshScreen(void) {
             unsigned char *hl = r->hl+E.coloff;
             int j;
             for (j = 0; j < len; j++) {
+                int file_col = E.coloff + j;
+                int is_selected = xcodex_is_in_visual_selection(filerow, file_col);
+                
                 if (hl[j] == HL_NONPRINT) {
                     char sym;
-                    abAppend(&ab,"\x1b[7m",4);
+                    if (is_selected) {
+                        abAppend(&ab,"\x1b[7m",4);  /* Reverse video for selection */
+                    } else {
+                        abAppend(&ab,"\x1b[7m",4);
+                    }
                     if (c[j] <= 26)
                         sym = '@'+c[j];
                     else
@@ -2702,7 +2865,26 @@ void editorRefreshScreen(void) {
                             }
                         }
                     }
+                    
+                    /* Apply selection highlight */
+                    if (is_selected) {
+                        abAppend(&ab,"\x1b[7m",4);  /* Reverse video for selection */
+                    }
+                    
                     abAppend(&ab,c+j,1);
+                    
+                    /* Reset selection highlight */
+                    if (is_selected) {
+                        abAppend(&ab,"\x1b[0m",4);  /* Reset all formatting */
+                        /* Reapply background color */
+                        if (current_theme >= 0 && current_theme < NUM_THEMES) {
+                            char bg_color[16];
+                            int bg_len = snprintf(bg_color, sizeof(bg_color), "\x1b[48;5;%dm", themes[current_theme].bg_color);
+                            if (bg_len > 0 && bg_len < sizeof(bg_color)) {
+                                abAppend(&ab, bg_color, bg_len);
+                            }
+                        }
+                    }
                 } else {
                     int color = editorSyntaxToColor(hl[j]);
                     if (color != current_color) {
@@ -2711,7 +2893,32 @@ void editorRefreshScreen(void) {
                         current_color = color;
                         abAppend(&ab,buf,clen);
                     }
+                    
+                    /* Apply selection highlight */
+                    if (is_selected) {
+                        abAppend(&ab,"\x1b[7m",4);  /* Reverse video for selection */
+                    }
+                    
                     abAppend(&ab,c+j,1);
+                    
+                    /* Reset selection highlight and restore color */
+                    if (is_selected) {
+                        abAppend(&ab,"\x1b[0m",4);  /* Reset all formatting */
+                        /* Reapply background color */
+                        if (current_theme >= 0 && current_theme < NUM_THEMES) {
+                            char bg_color[16];
+                            int bg_len = snprintf(bg_color, sizeof(bg_color), "\x1b[48;5;%dm", themes[current_theme].bg_color);
+                            if (bg_len > 0 && bg_len < sizeof(bg_color)) {
+                                abAppend(&ab, bg_color, bg_len);
+                            }
+                        }
+                        /* Reapply syntax color */
+                        if (color != -1) {
+                            char buf[32];
+                            int clen = snprintf(buf,sizeof(buf),"\x1b[38;5;%dm",color);
+                            abAppend(&ab,buf,clen);
+                        }
+                    }
                 }
             }
         }
@@ -2788,7 +2995,7 @@ void editorRefreshScreen(void) {
     snprintf(buf,sizeof(buf),"\x1b[%d;%dH",E.cy+1,cx);
     abAppend(&ab,buf,strlen(buf));
     abAppend(&ab,"\x1b[?25h",6); /* Show cursor. */
-    write(STDOUT_FILENO,ab.b,ab.len);
+    xcodex_write(STDOUT_FILENO,ab.b,ab.len);
     abFree(&ab);
 }
 
@@ -3006,6 +3213,8 @@ void editorProcessKeypress(int fd) {
             xcodex_process_insert_mode(c, &quit_times);
             break;
         case XCODEX_MODE_VISUAL:
+        case XCODEX_MODE_VISUAL_LINE:
+        case XCODEX_MODE_VISUAL_BLOCK:
             xcodex_process_visual_mode(c);
             break;
         case XCODEX_MODE_COMMAND:
@@ -3073,6 +3282,12 @@ void xcodex_process_normal_mode(int c, int *quit_times, int fd) {
             break;
         case 'v':  /* Visual mode */
             xcodex_set_mode(XCODEX_MODE_VISUAL);
+            break;
+        case 'V':  /* Visual line mode */
+            xcodex_set_mode(XCODEX_MODE_VISUAL_LINE);
+            break;
+        case CTRL_V:  /* Visual block mode */
+            xcodex_set_mode(XCODEX_MODE_VISUAL_BLOCK);
             break;
         case ':':  /* Command mode */
             xcodex_set_mode(XCODEX_MODE_COMMAND);
@@ -3144,6 +3359,7 @@ void xcodex_process_normal_mode(int c, int *quit_times, int fd) {
             
         /* ==== Editing Commands ==== */
         case 'x':  /* Delete character */
+            xcodex_start_undo_group();
             for (int i = 0; i < count; i++) {
                 int filerow = E.rowoff + E.cy;
                 int filecol = E.coloff + E.cx;
@@ -3155,10 +3371,64 @@ void xcodex_process_normal_mode(int c, int *quit_times, int fd) {
                 }
             }
             break;
+        case 'd':  /* Delete line (dd) */
+            if (E.command_len == 0) {
+                E.command_buffer[0] = 'd';
+                E.command_len = 1;
+                E.command_buffer[1] = '\0';
+                editorSetStatusMessage("-- NORMAL -- d");
+                return;
+            } else if (E.command_len == 1 && E.command_buffer[0] == 'd') {
+                /* dd - Delete current line */
+                xcodex_start_undo_group();
+                for (int i = 0; i < count; i++) {
+                    xcodex_delete_current_line();
+                }
+                E.command_len = 0;
+                E.command_buffer[0] = '\0';
+            }
+            break;
         case 'X':  /* Delete character before cursor */
+            xcodex_start_undo_group();
             for (int i = 0; i < count; i++) {
                 editorDelChar();
             }
+            break;
+            
+        /* ==== Yank and Paste ==== */
+        case 'p':  /* Paste after cursor */
+            xcodex_start_undo_group();
+            for (int i = 0; i < count; i++) {
+                xcodex_paste_text();
+            }
+            break;
+        case 'P':  /* Paste before cursor */
+            xcodex_start_undo_group();
+            for (int i = 0; i < count; i++) {
+                /* Move cursor to paste position */
+                if (E.yank_is_line_mode) {
+                    /* For line mode, paste before current line */
+                    xcodex_move_line_start();
+                    if (E.cy > 0) {
+                        E.cy--;
+                    } else if (E.rowoff > 0) {
+                        E.rowoff--;
+                    }
+                } else {
+                    /* For character mode, paste before cursor */
+                    if (E.cx > 0) {
+                        E.cx--;
+                    } else if (E.coloff > 0) {
+                        E.coloff--;
+                    }
+                }
+                xcodex_paste_text();
+            }
+            break;
+            
+        /* ==== Undo ==== */
+        case 'u':  /* Undo */
+            xcodex_undo();
             break;
             
         /* ==== File Operations ==== */
@@ -3293,63 +3563,487 @@ void xcodex_process_visual_mode(int c) {
             xcodex_set_mode(XCODEX_MODE_NORMAL);
             break;
             
+        case 'v':  /* Switch to character-wise visual mode */
+            if (E.mode == XCODEX_MODE_VISUAL_LINE || E.mode == XCODEX_MODE_VISUAL_BLOCK) {
+                xcodex_set_mode(XCODEX_MODE_VISUAL);
+            }
+            break;
+            
+        case 'V':  /* Switch to line-wise visual mode */
+            if (E.mode == XCODEX_MODE_VISUAL || E.mode == XCODEX_MODE_VISUAL_BLOCK) {
+                xcodex_set_mode(XCODEX_MODE_VISUAL_LINE);
+            }
+            break;
+            
+        case CTRL_V:  /* Switch to block visual mode */
+            if (E.mode == XCODEX_MODE_VISUAL || E.mode == XCODEX_MODE_VISUAL_LINE) {
+                xcodex_set_mode(XCODEX_MODE_VISUAL_BLOCK);
+            }
+            break;
+            
         /* Movement keys update selection */
         case 'h':
         case ARROW_LEFT:
-            editorMoveCursor(ARROW_LEFT);
+            /* Move cursor left */
+            if (E.cx > 0) {
+                E.cx--;
+            } else if (E.coloff > 0) {
+                E.coloff--;
+            } else if (E.cy > 0) {
+                E.cy--;
+                /* Move to end of previous line */
+                int filerow = E.rowoff + E.cy;
+                if (filerow >= 0 && filerow < E.numrows) {
+                    erow *row = &E.row[filerow];
+                    E.cx = row->size;
+                    if (E.cx > E.screencols - E.line_numbers_width - 1) {
+                        E.coloff = E.cx - (E.screencols - E.line_numbers_width - 1);
+                        E.cx = E.screencols - E.line_numbers_width - 1;
+                    }
+                }
+            }
+            /* Update selection end */
             E.visual_end_row = E.cy;
-            E.visual_end_col = E.cx;
+            if (E.mode == XCODEX_MODE_VISUAL_LINE) {
+                E.visual_end_col = 0;
+            } else {
+                E.visual_end_col = E.cx;
+            }
             break;
+            
         case 'j':
         case ARROW_DOWN:
-            editorMoveCursor(ARROW_DOWN);
+            /* Move cursor down */
+            if (E.cy < E.screenrows - 1) {
+                E.cy++;
+            } else if (E.rowoff + E.screenrows < E.numrows) {
+                E.rowoff++;
+            }
+            /* Adjust cursor position for line length */
+            {
+                int filerow = E.rowoff + E.cy;
+                if (filerow < E.numrows) {
+                    erow *row = &E.row[filerow];
+                    if (E.cx > row->size) {
+                        E.cx = row->size;
+                    }
+                }
+            }
+            /* Update selection end */
             E.visual_end_row = E.cy;
-            E.visual_end_col = E.cx;
+            if (E.mode == XCODEX_MODE_VISUAL_LINE) {
+                E.visual_end_col = 0;
+            } else {
+                E.visual_end_col = E.cx;
+            }
             break;
+            
         case 'k':
         case ARROW_UP:
-            editorMoveCursor(ARROW_UP);
+            /* Move cursor up */
+            if (E.cy > 0) {
+                E.cy--;
+            } else if (E.rowoff > 0) {
+                E.rowoff--;
+            }
+            /* Adjust cursor position for line length */
+            {
+                int filerow = E.rowoff + E.cy;
+                if (filerow >= 0 && filerow < E.numrows) {
+                    erow *row = &E.row[filerow];
+                    if (E.cx > row->size) {
+                        E.cx = row->size;
+                    }
+                }
+            }
+            /* Update selection end */
             E.visual_end_row = E.cy;
-            E.visual_end_col = E.cx;
+            if (E.mode == XCODEX_MODE_VISUAL_LINE) {
+                E.visual_end_col = 0;
+            } else {
+                E.visual_end_col = E.cx;
+            }
             break;
+            
         case 'l':
         case ARROW_RIGHT:
-            editorMoveCursor(ARROW_RIGHT);
+            /* Move cursor right */
+            {
+                int filerow = E.rowoff + E.cy;
+                if (filerow >= 0 && filerow < E.numrows) {
+                    erow *row = &E.row[filerow];
+                    if (E.cx < row->size) {
+                        if (E.cx < E.screencols - E.line_numbers_width - 1) {
+                            E.cx++;
+                        } else {
+                            E.coloff++;
+                        }
+                    }
+                }
+            }
+            /* Update selection end */
             E.visual_end_row = E.cy;
-            E.visual_end_col = E.cx;
+            if (E.mode == XCODEX_MODE_VISUAL_LINE) {
+                E.visual_end_col = 0;
+            } else {
+                E.visual_end_col = E.cx;
+            }
             break;
             
-        case 'w':  /* Word movement */
-            xcodex_move_word_forward(1);
+        case 'w':  /* Word movement forward */
+            {
+                int filerow = E.rowoff + E.cy;
+                if (filerow >= 0 && filerow < E.numrows) {
+                    erow *row = &E.row[filerow];
+                    int filecol = E.coloff + E.cx;
+                    
+                    /* Skip current word */
+                    while (filecol < row->size && (isalnum(row->chars[filecol]) || row->chars[filecol] == '_')) {
+                        filecol++;
+                    }
+                    /* Skip whitespace */
+                    while (filecol < row->size && isspace(row->chars[filecol])) {
+                        filecol++;
+                    }
+                    
+                    /* Update cursor position */
+                    if (filecol < row->size) {
+                        E.cx = filecol - E.coloff;
+                        if (E.cx >= E.screencols - E.line_numbers_width) {
+                            E.coloff = filecol - (E.screencols - E.line_numbers_width - 1);
+                            E.cx = E.screencols - E.line_numbers_width - 1;
+                        }
+                    }
+                }
+            }
+            /* Update selection end */
             E.visual_end_row = E.cy;
-            E.visual_end_col = E.cx;
-            break;
-        case 'b':
-            xcodex_move_word_backward(1);
-            E.visual_end_row = E.cy;
-            E.visual_end_col = E.cx;
+            if (E.mode == XCODEX_MODE_VISUAL_LINE) {
+                E.visual_end_col = 0;
+            } else {
+                E.visual_end_col = E.cx;
+            }
             break;
             
-        case '0':  /* Line movement */
-            xcodex_move_line_start();
+        case 'b':  /* Word movement backward */
+            {
+                int filerow = E.rowoff + E.cy;
+                if (filerow >= 0 && filerow < E.numrows) {
+                    erow *row = &E.row[filerow];
+                    int filecol = E.coloff + E.cx;
+                    
+                    if (filecol > 0) {
+                        filecol--;
+                        /* Skip whitespace */
+                        while (filecol > 0 && isspace(row->chars[filecol])) {
+                            filecol--;
+                        }
+                        /* Skip current word */
+                        while (filecol > 0 && (isalnum(row->chars[filecol]) || row->chars[filecol] == '_')) {
+                            filecol--;
+                        }
+                        if (filecol > 0 && !(isalnum(row->chars[filecol]) || row->chars[filecol] == '_')) {
+                            filecol++;
+                        }
+                        
+                        /* Update cursor position */
+                        if (filecol >= E.coloff) {
+                            E.cx = filecol - E.coloff;
+                        } else {
+                            E.coloff = filecol;
+                            E.cx = 0;
+                        }
+                    }
+                }
+            }
+            /* Update selection end */
             E.visual_end_row = E.cy;
-            E.visual_end_col = E.cx;
+            if (E.mode == XCODEX_MODE_VISUAL_LINE) {
+                E.visual_end_col = 0;
+            } else {
+                E.visual_end_col = E.cx;
+            }
             break;
-        case '$':
-            xcodex_move_line_end();
+            
+        case '0':  /* Line start */
+            E.cx = 0;
+            E.coloff = 0;
+            /* Update selection end */
             E.visual_end_row = E.cy;
-            E.visual_end_col = E.cx;
+            if (E.mode == XCODEX_MODE_VISUAL_LINE) {
+                E.visual_end_col = 0;
+            } else {
+                E.visual_end_col = E.cx;
+            }
+            break;
+            
+        case '$':  /* Line end */
+            {
+                int filerow = E.rowoff + E.cy;
+                if (filerow >= 0 && filerow < E.numrows) {
+                    erow *row = &E.row[filerow];
+                    if (row->size > 0) {
+                        int target_col = row->size - 1;
+                        if (target_col < E.screencols - E.line_numbers_width) {
+                            E.cx = target_col;
+                            E.coloff = 0;
+                        } else {
+                            E.coloff = target_col - (E.screencols - E.line_numbers_width - 1);
+                            E.cx = E.screencols - E.line_numbers_width - 1;
+                        }
+                    }
+                }
+            }
+            /* Update selection end */
+            E.visual_end_row = E.cy;
+            if (E.mode == XCODEX_MODE_VISUAL_LINE) {
+                E.visual_end_col = 0;
+            } else {
+                E.visual_end_col = E.cx;
+            }
+            break;
+            
+        /* ==== Advanced Movement Commands ==== */
+        case 'G':  /* Go to line (or last line if no count) */
+            xcodex_go_to_last_line();
+            /* Update selection end */
+            E.visual_end_row = E.cy;
+            if (E.mode == XCODEX_MODE_VISUAL_LINE) {
+                E.visual_end_col = 0;
+            } else {
+                E.visual_end_col = E.cx;
+            }
+            break;
+            
+        case 'g':  /* Handle gg command */
+            if (E.command_len == 0) {
+                E.command_buffer[0] = 'g';
+                E.command_len = 1;
+                E.command_buffer[1] = '\0';
+                editorSetStatusMessage("-- VISUAL -- g");
+                return;
+            } else if (E.command_len == 1 && E.command_buffer[0] == 'g') {
+                xcodex_go_to_first_line();
+                E.command_len = 0;
+                E.command_buffer[0] = '\0';
+                /* Update selection end */
+                E.visual_end_row = E.cy;
+                if (E.mode == XCODEX_MODE_VISUAL_LINE) {
+                    E.visual_end_col = 0;
+                } else {
+                    E.visual_end_col = E.cx;
+                }
+            }
+            break;
+            
+        case 'e':  /* Move to end of word */
+            {
+                int filerow = E.rowoff + E.cy;
+                if (filerow >= 0 && filerow < E.numrows) {
+                    erow *row = &E.row[filerow];
+                    int filecol = E.coloff + E.cx;
+                    
+                    /* If at end of word, move to next word */
+                    if (filecol < row->size && !xcodex_is_word_boundary(row->chars[filecol])) {
+                        while (filecol < row->size && !xcodex_is_word_boundary(row->chars[filecol])) {
+                            filecol++;
+                        }
+                        filecol--; /* Back up to last character of word */
+                    } else {
+                        /* Skip whitespace */
+                        while (filecol < row->size && xcodex_is_word_boundary(row->chars[filecol])) {
+                            filecol++;
+                        }
+                        /* Move to end of word */
+                        while (filecol < row->size && !xcodex_is_word_boundary(row->chars[filecol])) {
+                            filecol++;
+                        }
+                        if (filecol > 0) filecol--; /* Back up to last character of word */
+                    }
+                    
+                    /* Update cursor position */
+                    int effective_cols = E.screencols - E.line_numbers_width;
+                    if (filecol >= E.coloff + effective_cols) {
+                        E.coloff = filecol - effective_cols + 1;
+                        E.cx = effective_cols - 1;
+                    } else {
+                        E.cx = filecol - E.coloff;
+                    }
+                }
+            }
+            /* Update selection end */
+            E.visual_end_row = E.cy;
+            if (E.mode == XCODEX_MODE_VISUAL_LINE) {
+                E.visual_end_col = 0;
+            } else {
+                E.visual_end_col = E.cx;
+            }
+            break;
+            
+        case '%':  /* Jump to matching bracket */
+            {
+                int filerow = E.rowoff + E.cy;
+                if (filerow >= 0 && filerow < E.numrows) {
+                    erow *row = &E.row[filerow];
+                    int filecol = E.coloff + E.cx;
+                    
+                    if (filecol < row->size) {
+                        char c = row->chars[filecol];
+                        char match_char = 0;
+                        int direction = 0;
+                        
+                        /* Determine matching character and direction */
+                        switch (c) {
+                            case '(': match_char = ')'; direction = 1; break;
+                            case ')': match_char = '('; direction = -1; break;
+                            case '[': match_char = ']'; direction = 1; break;
+                            case ']': match_char = '['; direction = -1; break;
+                            case '{': match_char = '}'; direction = 1; break;
+                            case '}': match_char = '{'; direction = -1; break;
+                            default: 
+                                editorSetStatusMessage("No matching bracket found");
+                                break;
+                        }
+                        
+                        if (match_char) {
+                            int level = 1;
+                            int search_row = filerow;
+                            int search_col = filecol + direction;
+                            
+                            /* Search for matching bracket */
+                            while (level > 0 && search_row >= 0 && search_row < E.numrows) {
+                                erow *search_row_ptr = &E.row[search_row];
+                                
+                                while (level > 0 && search_col >= 0 && search_col < search_row_ptr->size) {
+                                    char search_c = search_row_ptr->chars[search_col];
+                                    if (search_c == c) {
+                                        level++;
+                                    } else if (search_c == match_char) {
+                                        level--;
+                                    }
+                                    
+                                    if (level == 0) {
+                                        /* Found matching bracket */
+                                        E.cy = 0;
+                                        E.rowoff = search_row;
+                                        E.cx = search_col - E.coloff;
+                                        E.coloff = 0;
+                                        
+                                        if (search_row < E.screenrows) {
+                                            E.cy = search_row;
+                                            E.rowoff = 0;
+                                        }
+                                        
+                                        int effective_cols = E.screencols - E.line_numbers_width;
+                                        if (search_col >= effective_cols) {
+                                            E.coloff = search_col - effective_cols + 1;
+                                            E.cx = effective_cols - 1;
+                                        } else {
+                                            E.cx = search_col;
+                                            E.coloff = 0;
+                                        }
+                                        break;
+                                    }
+                                    search_col += direction;
+                                }
+                                
+                                if (level > 0) {
+                                    search_row += direction;
+                                    search_col = (direction > 0) ? 0 : (search_row >= 0 && search_row < E.numrows ? E.row[search_row].size - 1 : 0);
+                                }
+                            }
+                            
+                            if (level > 0) {
+                                editorSetStatusMessage("No matching bracket found");
+                            }
+                        }
+                    }
+                }
+            }
+            /* Update selection end */
+            E.visual_end_row = E.cy;
+            if (E.mode == XCODEX_MODE_VISUAL_LINE) {
+                E.visual_end_col = 0;
+            } else {
+                E.visual_end_col = E.cx;
+            }
             break;
             
         /* Actions on selection */
         case 'x':
         case 'd':
-            editorSetStatusMessage("Visual deletion not yet implemented");
+            /* Cut (delete and yank) */
+            {
+                int size, is_line_mode;
+                char *selected_text = xcodex_get_selected_text(&size, &is_line_mode);
+                
+                if (selected_text) {
+                    xcodex_yank_text(selected_text, size, is_line_mode);
+                    xcodex_delete_selected_text();
+                    free(selected_text);
+                    
+                    if (is_line_mode) {
+                        editorSetStatusMessage("Cut %d lines", 
+                            E.visual_end_row - E.visual_start_row + 1);
+                    } else {
+                        editorSetStatusMessage("Cut %d characters", size);
+                    }
+                } else {
+                    editorSetStatusMessage("Nothing to cut");
+                }
+            }
             xcodex_set_mode(XCODEX_MODE_NORMAL);
             break;
+            
         case 'y':
-            editorSetStatusMessage("Visual yanking not yet implemented");
+            /* Yank (copy) */
+            {
+                int size, is_line_mode;
+                char *selected_text = xcodex_get_selected_text(&size, &is_line_mode);
+                
+                if (selected_text) {
+                    xcodex_yank_text(selected_text, size, is_line_mode);
+                    free(selected_text);
+                    
+                    if (is_line_mode) {
+                        editorSetStatusMessage("Yanked %d lines", 
+                            E.visual_end_row - E.visual_start_row + 1);
+                    } else {
+                        editorSetStatusMessage("Yanked %d characters", size);
+                    }
+                } else {
+                    editorSetStatusMessage("Nothing to yank");
+                }
+            }
             xcodex_set_mode(XCODEX_MODE_NORMAL);
+            break;
+            
+        case 'c':
+            /* Change (cut and enter insert mode) */
+            {
+                int size, is_line_mode;
+                char *selected_text = xcodex_get_selected_text(&size, &is_line_mode);
+                
+                if (selected_text) {
+                    xcodex_yank_text(selected_text, size, is_line_mode);
+                    xcodex_delete_selected_text();
+                    free(selected_text);
+                    
+                    if (is_line_mode) {
+                        editorSetStatusMessage("Changed %d lines", 
+                            E.visual_end_row - E.visual_start_row + 1);
+                    } else {
+                        editorSetStatusMessage("Changed %d characters", size);
+                    }
+                } else {
+                    editorSetStatusMessage("Nothing to change");
+                }
+            }
+            xcodex_set_mode(XCODEX_MODE_INSERT);
+            break;
+
+        case 'u':  /* Undo */
+            xcodex_undo();
             break;
             
         default:
@@ -3357,7 +4051,7 @@ void xcodex_process_visual_mode(int c) {
     }
 }
 
-/* Process keys in COMMAND mode - Ex commands */
+/* Process keys in COMMAND mode */
 void xcodex_process_command_mode(int c) {
     switch (c) {
         case ESC:  /* Exit to normal mode */
@@ -3398,7 +4092,7 @@ void xcodex_process_command_mode(int c) {
 
 /* Execute command mode commands */
 void xcodex_execute_command(char *command) {
-    if (!command) return;  /* Null check */
+    if (!command) return;
     
     if (strcmp(command, "q") == 0) {
         if (E.dirty) {
@@ -3423,7 +4117,7 @@ void xcodex_execute_command(char *command) {
         }
     } else if (strlen(command) > 0 && command[0] >= '1' && command[0] <= '9') {
         int line = atoi(command);
-        if (line > 0) {  /* Ensure positive line number */
+        if (line > 0) {
             xcodex_go_to_line(line);
         }
     } else if (strlen(command) > 0) {
@@ -3446,6 +4140,31 @@ void updateWindowSize(void) {
     E.screenrows -= 2; /* Get room for status bar. */
 }
 
+#if XCODEX_WINDOWS
+BOOL WINAPI ConsoleHandler(DWORD dwCtrlType) {
+    switch(dwCtrlType) {
+    case CTRL_C_EVENT:
+    case CTRL_BREAK_EVENT:
+    case CTRL_CLOSE_EVENT:
+    case CTRL_LOGOFF_EVENT:
+    case CTRL_SHUTDOWN_EVENT:
+        editorAtExit();
+        return TRUE;
+    default:
+        return FALSE;
+    }
+}
+
+void handleSigWinCh() {
+    updateWindowSize();
+    if (E.cy > E.screenrows) E.cy = E.screenrows - 1;
+    int effective_screencols = E.screencols - E.line_numbers_width;
+    if (E.cx > effective_screencols) E.cx = effective_screencols - 1;
+    editorRefreshScreen();
+}
+#endif
+
+#if XCODEX_POSIX
 void handleSigWinCh(int unused __attribute__((unused))) {
     updateWindowSize();
     if (E.cy > E.screenrows) E.cy = E.screenrows - 1;
@@ -3453,6 +4172,7 @@ void handleSigWinCh(int unused __attribute__((unused))) {
     if (E.cx > effective_screencols) E.cx = effective_screencols - 1;
     editorRefreshScreen();
 }
+#endif
 
 void initEditor(void) {
     E.cx = 0;
@@ -3470,9 +4190,22 @@ void initEditor(void) {
     /* Initialize modal system */
     xcodex_init_modal_system();
     
+    /* Initialize undo system */
+    xcodex_init_undo_system();
+    
     updateWindowSize();
     editorUpdateLineNumberWidth();  /* Initialize line number width */
+    
+    /* Platform-specific initialization */
+#if XCODEX_WINDOWS
+    SetConsoleCtrlHandler(ConsoleHandler, TRUE);
+    /* Enable UTF-8 output */
+    SetConsoleOutputCP(CP_UTF8);
+#endif
+
+#if XCODEX_POSIX
     signal(SIGWINCH, handleSigWinCh);
+#endif
     
     /* Set initial background color with bounds checking */
     if (current_theme >= 0 && current_theme < NUM_THEMES) {
@@ -3489,12 +4222,32 @@ int xcodex_main(int argc, char **argv) {
     initEditor();
     editorSelectSyntaxHighlight(argv[1]);
     editorOpen(argv[1]);
-    if (enableRawMode(STDIN_FILENO) == -1) return 1;
+    
+    /* Try to enable raw mode with better error handling */
+    if (enableRawMode(STDIN_FILENO) == -1) {
+        fprintf(stderr, "Failed to enable raw mode\n");
+        return 0;
+    }
+    
     editorSetStatusMessage(
-        "HELP: Ctrl-S = save | Ctrl-Q = quit | Ctrl-F = find | Ctrl-T = theme | Ctrl-N = line numbers");
+        "Ctrl-S = save | Ctrl-Q = quit | Ctrl-F = find | Ctrl-T = theme | Ctrl-N = line num");
+    
     while(!E.quit_requested) {
         editorRefreshScreen();
         editorProcessKeypress(STDIN_FILENO);
+        
+#if XCODEX_WINDOWS
+        /* Handle window resize on Windows */
+        CONSOLE_SCREEN_BUFFER_INFO new_csbi;
+        HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+        if (hOut != INVALID_HANDLE_VALUE && GetConsoleScreenBufferInfo(hOut, &new_csbi)) {
+            int new_cols = new_csbi.srWindow.Right - new_csbi.srWindow.Left + 1;
+            int new_rows = new_csbi.srWindow.Bottom - new_csbi.srWindow.Top + 1;
+            if (new_cols != E.screencols || new_rows != E.screenrows + 2) {
+                handleSigWinCh();
+            }
+        }
+#endif
     }
     
     /* Clean up terminal state before exiting */
@@ -3503,12 +4256,16 @@ int xcodex_main(int argc, char **argv) {
     return 1;
 }
 
-#else
-
-#include <stdio.h>
+#if XCODEX_WINDOWS || XCODEX_POSIX
 
 int XcodexMain(int argc, char **argv) {
-    printf("XCodex editor is only available on POSIX systems.\n");
+    return xcodex_main(argc, argv);
+}
+
+#else
+
+int XcodexMain(int argc, char **argv) {
+    printf("XCodex editor is not supported on this platform.\n");
     return 1;
 }
 
