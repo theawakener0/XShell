@@ -83,8 +83,22 @@
 #include <sys/types.h>
 #include <stdarg.h>
 #include <fcntl.h>
+#include "xcodex_types.h"
 #include "syntax.h"
 #include "themes.h"
+
+/* Plugin system includes - conditional compilation */
+#ifdef XCODEX_ENABLE_LUA
+#include "xcodex_lua.h"
+#endif
+
+#ifdef XCODEX_ENABLE_COMPLETION
+#include "xcodex_completion.h"
+#endif
+
+#ifdef XCODEX_ENABLE_LSP
+#include "xcodex_lsp.h"
+#endif
 
 #define XCODEX_ENABLED 1
 
@@ -185,18 +199,7 @@ void editorFind(int fd);
 void xcodex_execute_command(char *command);
 void editorInsertRow(int at, char *s, size_t len);
 void editorDelRow(int at);
-
-/* This structure represents a single line of the file we are editing. */
-typedef struct erow {
-    int idx;            /* Row index in the file, zero-based. */
-    int size;           /* Size of the row, excluding the null term. */
-    int rsize;          /* Size of the rendered row. */
-    char *chars;        /* Row content. */
-    char *render;       /* Row content "rendered" for screen (for TABs). */
-    unsigned char *hl;  /* Syntax highlight type for each character in render.*/
-    int hl_oc;          /* Row had open comment at end in last syntax highlight
-                           check. */
-} erow;
+char* editorRowsToString(int *buflen);
 
 /* Forward declarations that need erow */
 void editorRowDelChar(erow *row, int at);
@@ -234,62 +237,7 @@ typedef struct hlcolor {
 
 #define UNDO_STACK_SIZE     100
 
-struct undoEntry {
-    int type;           /* Type of operation */
-    int row;            /* Row number */
-    int col;            /* Column number */
-    char *data;         /* Data associated with operation */
-    int data_len;       /* Length of data */
-    int group_id;       /* Group ID for grouping related operations */
-    int cursor_row;     /* Cursor position before operation */
-    int cursor_col;     /* Cursor position before operation */
-};
-
-struct editorConfig {
-    int cx,cy;  /* Cursor x and y position in characters */
-    int rowoff;     /* Offset of row displayed. */
-    int coloff;     /* Offset of column displayed. */
-    int screenrows; /* Number of rows that we can show */
-    int screencols; /* Number of cols that we can show */
-    int numrows;    /* Number of rows */
-    int rawmode;    /* Is terminal raw mode enabled? */
-    erow *row;      /* Rows */
-    int dirty;      /* File modified but not saved. */
-    char *filename; /* Currently open filename */
-    char statusmsg[80];
-    time_t statusmsg_time;
-    struct editorSyntax *syntax;    /* Current syntax highlight, or NULL. */
-    int show_line_numbers; /* Show line numbers */
-    int line_numbers_width; /* Width of line numbers */
-    
-    /* ============================ XCodex Modal System State ============================ */
-    int mode;                    /* Current editor mode */
-    int motion_count;            /* Number prefix for motions (e.g., 5j) */
-    char command_buffer[32];     /* Buffer for multi-character commands */
-    int command_len;             /* Length of current command */
-    int visual_start_row;        /* Visual selection start row */
-    int visual_start_col;        /* Visual selection start column */
-    int visual_end_row;          /* Visual selection end row */
-    int visual_end_col;          /* Visual selection end column */
-    int visual_line_mode;        /* 1 for line-wise, 0 for character-wise */
-    char last_search[256];       /* Last search pattern */
-    int search_direction;        /* 1 for forward, -1 for backward */
-    int quit_requested;          /* Flag to signal quit request */
-    
-    /* ============================ XCodex Yank/Clipboard System ============================ */
-    char *yank_buffer;           /* Yank buffer for copy/paste operations */
-    int yank_buffer_size;        /* Size of yank buffer */
-    int yank_is_line_mode;       /* 1 if yanked text is line-wise, 0 if character-wise */
-    
-    /* ============================ XCodex Undo System ============================ */
-    struct undoEntry *undo_stack;  /* Stack of undo entries */
-    int undo_count;                /* Number of undo entries */
-    int undo_capacity;             /* Capacity of undo stack */
-    int undo_group_id;             /* Current undo group ID */
-    int xcodex_undo_in_progress; /* Flag to indicate if undo is in progress */
-};
-
-static struct editorConfig E;
+struct editorConfig E;
 
 /*Maps syntax highlight token types to themed colors*/
 int editorSyntaxToColor(int hl) {
@@ -1498,11 +1446,6 @@ enum KEY_ACTION{
 };
 
 /* Forward declarations for append buffer */
-struct abuf {
-    char *b;
-    int len;
-};
-
 void abAppend(struct abuf *ab, const char *s, int len);
 
 
@@ -1542,6 +1485,20 @@ void disableRawMode(int fd) {
 /* Called at exit to avoid remaining in raw mode. */
 void editorAtExit(void) {
     disableRawMode(STDIN_FILENO);
+    
+    /* Cleanup plugin systems */
+#ifdef XCODEX_ENABLE_COMPLETION
+    xcodex_completion_cleanup();
+#endif
+
+#ifdef XCODEX_ENABLE_LUA
+    xcodex_lua_cleanup();
+#endif
+
+#ifdef XCODEX_ENABLE_LSP
+    xcodex_lsp_cleanup();
+#endif
+    
     /* Free yank buffer */
     xcodex_free_yank_buffer();
     /* Free undo system */
@@ -2161,12 +2118,35 @@ void editorDrawStatusBar(struct abuf *ab) {
     abAppend(ab, status_fg, strlen(status_fg));
 
     char status[80], rstatus[80];
-    int len = snprintf(status, sizeof(status), " %.15s - %d lines %s | %s | Theme: %s | Line#: %s",
+    
+    /* Build status string with plugin info */
+    char plugin_info[32] = "";
+#ifdef XCODEX_ENABLE_LUA
+    if (g_plugin_manager.count > 0) {
+        snprintf(plugin_info, sizeof(plugin_info), " | Plugins: %d", g_plugin_manager.count);
+    }
+#endif
+
+#ifdef XCODEX_ENABLE_COMPLETION
+    char completion_info[16] = "";
+    if (xcodex_completion_is_visible()) {
+        snprintf(completion_info, sizeof(completion_info), " | Complete");
+    }
+#endif
+    
+    int len = snprintf(status, sizeof(status), " %.15s - %d lines %s | %s | Theme: %s | Line#: %s%s%s",
         E.filename ? E.filename : "[No Name]", E.numrows, 
         E.dirty ? "(modified)" : "", 
         xcodex_get_mode_name(E.mode),
         themes[current_theme].name,
-        E.show_line_numbers ? "ON" : "OFF");
+        E.show_line_numbers ? "ON" : "OFF",
+        plugin_info
+#ifdef XCODEX_ENABLE_COMPLETION
+        , completion_info
+#else
+        , ""
+#endif
+        );
     
     int rlen = snprintf(rstatus, sizeof(rstatus),
         "%d/%d ", E.rowoff+E.cy+1, E.numrows);
@@ -2559,6 +2539,30 @@ int editorOpen(char *filename) {
     fclose(fp);
     E.dirty = 0;
     editorSetStatusMessage("Loaded %d lines from %s", line_count, filename);
+    
+    /* Auto-start LSP server for this file type */
+#ifdef XCODEX_ENABLE_LSP
+    if (xcodex_lsp_auto_start_for_file(filename) == 0) {
+        /* LSP server started, send document open notification */
+        lsp_server_t *server = xcodex_lsp_get_server_for_file(filename);
+        if (server && server->initialized) {
+            char *uri = xcodex_lsp_file_to_uri(filename);
+            char *content = editorRowsToString(NULL);
+            const char *language = "c"; /* Default, could be detected from extension */
+            xcodex_lsp_send_text_document_open(server, uri, language, content);
+            free(uri);
+            free(content);
+        }
+    }
+#endif
+
+    /* Notify plugins about file open */
+#ifdef XCODEX_ENABLE_LUA
+    char hook_args[512];
+    snprintf(hook_args, sizeof(hook_args), "\"%s\"", filename);
+    xcodex_lua_call_hook(XCODEX_HOOK_ON_FILE_OPEN, hook_args);
+#endif
+    
     return 0;
 }
 
@@ -2999,6 +3003,17 @@ void editorRefreshScreen(void) {
     }
     snprintf(buf,sizeof(buf),"\x1b[%d;%dH",E.cy+1,cx);
     abAppend(&ab,buf,strlen(buf));
+    
+    /* Draw completion popup if visible */
+#ifdef XCODEX_ENABLE_COMPLETION
+    if (xcodex_completion_is_visible()) {
+        xcodex_completion_draw(&ab);
+        /* Restore cursor position after drawing popup */
+        snprintf(buf,sizeof(buf),"\x1b[%d;%dH",E.cy+1,cx);
+        abAppend(&ab,buf,strlen(buf));
+    }
+#endif
+    
     abAppend(&ab,"\x1b[?25h",6); /* Show cursor. */
     xcodex_write(STDOUT_FILENO,ab.b,ab.len);
     abFree(&ab);
@@ -3506,6 +3521,12 @@ void xcodex_process_insert_mode(int c, int *quit_times) {
     switch (c) {
         case ESC:  /* Exit to normal mode */
         case CTRL_C:
+#ifdef XCODEX_ENABLE_COMPLETION
+            if (xcodex_completion_is_visible()) {
+                xcodex_completion_hide();
+                break;
+            }
+#endif
             xcodex_set_mode(XCODEX_MODE_NORMAL);
             /* Move cursor left when exiting insert mode (vim behavior) */
             if (E.cx > 0) {
@@ -3516,24 +3537,70 @@ void xcodex_process_insert_mode(int c, int *quit_times) {
             break;
             
         case ENTER:  /* Insert newline */
+#ifdef XCODEX_ENABLE_COMPLETION
+            if (xcodex_completion_is_visible()) {
+                xcodex_completion_accept();
+                break;
+            }
+#endif
             editorInsertNewline();
             break;
             
         case BACKSPACE:  /* Delete character */
         case CTRL_H:
         case DEL_KEY:
+#ifdef XCODEX_ENABLE_COMPLETION
+            if (xcodex_completion_is_visible()) {
+                xcodex_completion_hide();
+            }
+#endif
             editorDelChar();
             break;
             
-        case TAB:  /* Insert tab character */
+        case TAB:  /* Insert tab character or accept completion */
+#ifdef XCODEX_ENABLE_COMPLETION
+            if (xcodex_completion_is_visible()) {
+                xcodex_completion_accept();
+                break;
+            }
+#endif
             editorInsertChar(c);
             break;
             
         case ARROW_UP:  /* Arrow key movement in insert mode */
-        case ARROW_DOWN:
-        case ARROW_LEFT:
-        case ARROW_RIGHT:
+#ifdef XCODEX_ENABLE_COMPLETION
+            if (xcodex_completion_is_visible()) {
+                xcodex_completion_prev();
+                break;
+            }
+#endif
             editorMoveCursor(c);
+            break;
+            
+        case ARROW_DOWN:
+#ifdef XCODEX_ENABLE_COMPLETION
+            if (xcodex_completion_is_visible()) {
+                xcodex_completion_next();
+                break;
+            }
+#endif
+            editorMoveCursor(c);
+            break;
+            
+        case ARROW_LEFT:  /* Arrow key movement in insert mode */
+        case ARROW_RIGHT:
+#ifdef XCODEX_ENABLE_COMPLETION
+            if (xcodex_completion_is_visible()) {
+                xcodex_completion_hide();
+            }
+#endif
+            editorMoveCursor(c);
+            break;
+            
+        case CTRL_N:  /* Trigger completion */
+#ifdef XCODEX_ENABLE_COMPLETION
+            xcodex_completion_trigger();
+#endif
             break;
             
         case CTRL_S:  /* Save file */
@@ -3552,7 +3619,30 @@ void xcodex_process_insert_mode(int c, int *quit_times) {
             
         default:
             if (isprint(c)) {
+#ifdef XCODEX_ENABLE_COMPLETION
+                // Hide completion on any printable character except when continuing word
+                if (xcodex_completion_is_visible() && !isalnum(c) && c != '_') {
+                    xcodex_completion_hide();
+                }
+#endif
                 editorInsertChar(c);
+                
+#ifdef XCODEX_ENABLE_LUA
+                // Call Lua hooks
+                char char_str[2] = {c, '\0'};
+                xcodex_lua_call_hook(XCODEX_HOOK_ON_CHAR_INSERT, char_str);
+#endif
+
+#ifdef XCODEX_ENABLE_COMPLETION
+                // Auto-trigger completion after typing
+                if (isalpha(c) || c == '_') {
+                    char *prefix = xcodex_get_current_word_prefix();
+                    if (prefix && strlen(prefix) >= 2) {  // Trigger after 2 characters
+                        xcodex_completion_trigger();
+                    }
+                    free(prefix);
+                }
+#endif
             }
             break;
     }
@@ -4120,6 +4210,44 @@ void xcodex_execute_command(char *command) {
         } else {
             editorSetStatusMessage("No file name");
         }
+    }
+#ifdef XCODEX_ENABLE_LUA
+    else if (strncmp(command, "plugin ", 7) == 0) {
+        char *plugin_path = command + 7;
+        if (xcodex_lua_load_plugin(plugin_path) == 0) {
+            editorSetStatusMessage("Plugin loaded successfully");
+        }
+    } else if (strcmp(command, "plugins") == 0) {
+        if (g_plugin_manager.count == 0) {
+            editorSetStatusMessage("No plugins loaded");
+        } else {
+            editorSetStatusMessage("%d plugin(s) loaded", g_plugin_manager.count);
+        }
+    } else if (strncmp(command, "plugindir ", 10) == 0) {
+        char *plugin_dir = command + 10;
+        int loaded = xcodex_lua_load_plugins_from_dir(plugin_dir);
+        if (loaded > 0) {
+            editorSetStatusMessage("Loaded %d plugins from %s", loaded, plugin_dir);
+        } else {
+            editorSetStatusMessage("No plugins found in %s", plugin_dir);
+        }
+    }
+#endif
+#ifdef XCODEX_ENABLE_COMPLETION
+    else if (strcmp(command, "complete") == 0) {
+        xcodex_completion_trigger();
+        editorSetStatusMessage("Completion triggered");
+    }
+#endif
+    else if (strcmp(command, "help") == 0) {
+        editorSetStatusMessage("Commands: q w wq [line#]"
+#ifdef XCODEX_ENABLE_LUA
+                            " | plugin [file] plugins plugindir [dir]"
+#endif
+#ifdef XCODEX_ENABLE_COMPLETION  
+                            " | complete"
+#endif
+                            " | Ctrl+N=complete");
     } else if (strlen(command) > 0 && command[0] >= '1' && command[0] <= '9') {
         int line = atoi(command);
         if (line > 0) {
@@ -4216,6 +4344,34 @@ void initEditor(void) {
     if (current_theme >= 0 && current_theme < NUM_THEMES) {
         editorSetBackgroundColor(themes[current_theme].bg_color);
     }
+    
+    /* Initialize plugin system */
+#ifdef XCODEX_ENABLE_LUA
+    if (xcodex_lua_init() != 0) {
+        editorSetStatusMessage("Failed to initialize Lua plugin system");
+    } else {
+        /* Auto-load plugins from plugins directory */
+        if (xcodex_lua_auto_load_plugins() != 0) {
+            editorSetStatusMessage("Warning: Some plugins failed to load");
+        }
+    }
+#endif
+    
+    /* Initialize completion system */
+#ifdef XCODEX_ENABLE_COMPLETION
+    if (xcodex_completion_init() != 0) {
+        editorSetStatusMessage("Failed to initialize completion system");
+    }
+#endif
+
+    /* Initialize LSP system */
+#ifdef XCODEX_ENABLE_LSP
+    if (xcodex_lsp_init() != 0) {
+        editorSetStatusMessage("Failed to initialize LSP system");
+    } else {
+        editorSetStatusMessage("LSP system initialized with auto-start enabled");
+    }
+#endif
 }
 
 int xcodex_main(int argc, char **argv) {
