@@ -74,7 +74,6 @@
 
 /* Common includes */
 #include <stdlib.h>
-#include <unistd.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <errno.h>
@@ -4351,12 +4350,10 @@ void initEditor(void) {
 #ifdef XCODEX_ENABLE_LUA
     if (xcodex_lua_init() != 0) {
         editorSetStatusMessage("Failed to initialize Lua plugin system");
-        sleep(1); /* Sleep to allow the message to be displayed and the user can see it*/
     } else {
         /* Auto-load plugins from plugins directory */
         if (xcodex_lua_auto_load_plugins() != 0) {
             editorSetStatusMessage("Warning: Some plugins failed to load");
-            sleep(1); /* Sleep to allow the message to be displayed and the user can see it*/
         }
     }
 #endif
@@ -4365,10 +4362,8 @@ void initEditor(void) {
 #ifdef XCODEX_ENABLE_COMPLETION
     if (xcodex_completion_init() != 0) {
         editorSetStatusMessage("Failed to initialize completion system");
-        sleep(1); /* Sleep to allow the message to be displayed and the user can see it*/
     } else {
         editorSetStatusMessage("Completion system initialized with auto-trigger enabled");
-        sleep(1); /* Sleep to allow the message to be displayed and the user can see it*/
     }
 #endif
 
@@ -4376,10 +4371,8 @@ void initEditor(void) {
 #ifdef XCODEX_ENABLE_LSP
     if (xcodex_lsp_init() != 0) {
         editorSetStatusMessage("Failed to initialize LSP system");
-        sleep(1); /* Sleep to allow the message to be displayed and the user can see it*/
     } else {
         editorSetStatusMessage("LSP system initialized with auto-start enabled");
-        sleep(1); /* Sleep to allow the message to be displayed and the user can see it*/
     }
 #endif
 }
