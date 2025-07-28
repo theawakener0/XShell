@@ -206,29 +206,29 @@ int xcodex_lsp_start_server(const char *server_name) {
         return -1;
     }
 
-#ifdef _WIN32
+    #ifdef _WIN32
     /* Windows implementation using CreateProcess */
     HANDLE hChildStdinRd, hChildStdinWr;
     HANDLE hChildStdoutRd, hChildStdoutWr;
     HANDLE hChildStderrRd, hChildStderrWr;
     SECURITY_ATTRIBUTES saAttr;
-    
+
     saAttr.nLength = sizeof(SECURITY_ATTRIBUTES);
     saAttr.bInheritHandle = TRUE;
     saAttr.lpSecurityDescriptor = NULL;
-    
+
     /* Create pipes */
     if (!CreatePipe(&hChildStdoutRd, &hChildStdoutWr, &saAttr, 0) ||
         !CreatePipe(&hChildStdinRd, &hChildStdinWr, &saAttr, 0) ||
         !CreatePipe(&hChildStderrRd, &hChildStderrWr, &saAttr, 0)) {
         return -1;
     }
-    
+
     /* Ensure the read handle to the pipe for STDOUT/STDERR is not inherited */
     SetHandleInformation(hChildStdoutRd, HANDLE_FLAG_INHERIT, 0);
     SetHandleInformation(hChildStderrRd, HANDLE_FLAG_INHERIT, 0);
     SetHandleInformation(hChildStdinWr, HANDLE_FLAG_INHERIT, 0);
-    
+
     /* Build command line */
     char cmdline[1024] = {0};
     snprintf(cmdline, sizeof(cmdline), "%s", server->config->command);
@@ -236,7 +236,7 @@ int xcodex_lsp_start_server(const char *server_name) {
         strncat(cmdline, " ", sizeof(cmdline) - strlen(cmdline) - 1);
         strncat(cmdline, server->config->args[i], sizeof(cmdline) - strlen(cmdline) - 1);
     }
-    
+
     STARTUPINFOA si;
     PROCESS_INFORMATION pi;
     ZeroMemory(&si, sizeof(si));
@@ -245,7 +245,7 @@ int xcodex_lsp_start_server(const char *server_name) {
     si.hStdOutput = hChildStdoutWr;
     si.hStdInput = hChildStdinRd;
     si.dwFlags |= STARTF_USESTDHANDLES;
-    
+
     if (!CreateProcessA(NULL, cmdline, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
         CloseHandle(hChildStdinRd);
         CloseHandle(hChildStdinWr);
@@ -255,46 +255,46 @@ int xcodex_lsp_start_server(const char *server_name) {
         CloseHandle(hChildStderrWr);
         return -1;
     }
-    
+
     /* Close handles not needed in parent */
     CloseHandle(hChildStdinRd);
     CloseHandle(hChildStdoutWr);
     CloseHandle(hChildStderrWr);
     CloseHandle(pi.hThread);
-    
+
     /* Store handles in Windows-compatible fields */
     server->process_handle = pi.hProcess;
     server->stdin_handle = hChildStdinWr;
     server->stdout_handle = hChildStdoutRd;
     server->stderr_handle = hChildStderrRd;
     server->running = 1;
-    
-#ifndef _WIN32
+
+    #else
     /* POSIX implementation */
     int stdin_pipe[2], stdout_pipe[2], stderr_pipe[2];
-    
+
     if (pipe(stdin_pipe) == -1 || pipe(stdout_pipe) == -1 || pipe(stderr_pipe) == -1) {
         return -1;
     }
-    
+
     pid_t pid = fork();
     if (pid == -1) {
         return -1;
     }
-    
+
     if (pid == 0) {
         /* Child process - LSP server */
         dup2(stdin_pipe[0], STDIN_FILENO);
         dup2(stdout_pipe[1], STDOUT_FILENO);
         dup2(stderr_pipe[1], STDERR_FILENO);
-        
+
         close(stdin_pipe[0]);
         close(stdin_pipe[1]);
         close(stdout_pipe[0]);
         close(stdout_pipe[1]);
         close(stderr_pipe[0]);
         close(stderr_pipe[1]);
-        
+
         /* Prepare arguments */
         char **exec_args = malloc(sizeof(char*) * (server->config->arg_count + 2));
         exec_args[0] = server->config->command;
@@ -302,33 +302,30 @@ int xcodex_lsp_start_server(const char *server_name) {
             exec_args[i + 1] = server->config->args[i];
         }
         exec_args[server->config->arg_count + 1] = NULL;
-        
+
         execvp(server->config->command, exec_args);
         exit(1);
     }
-    
+
     /* Parent process */
     close(stdin_pipe[0]);
     close(stdout_pipe[1]);
     close(stderr_pipe[1]);
-    
+
     server->pid = pid;
     server->stdin_fd = stdin_pipe[1];
     server->stdout_fd = stdout_pipe[0];
     server->stderr_fd = stderr_pipe[0];
     server->running = 1;
-    
+
     /* Make pipes non-blocking */
     fcntl(server->stdout_fd, F_SETFL, O_NONBLOCK);
     fcntl(server->stderr_fd, F_SETFL, O_NONBLOCK);
-#else
-    /* Platform not supported - just return error */
-    return -1;
-#endif
-    
+    #endif
+
     /* Send initialize request */
     xcodex_lsp_send_initialize(server);
-    
+
     return 0;
 }
 
@@ -593,4 +590,3 @@ int xcodex_lsp_auto_start_for_file(const char *filename) {
 
 #endif
 
-#endif /* XCODEX_ENABLE_LSP */
