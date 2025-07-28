@@ -4338,6 +4338,7 @@ void initEditor(void) {
 
 #if XCODEX_POSIX
     signal(SIGWINCH, handleSigWinCh);
+    signal(SIGPIPE, SIG_IGN);
 #endif
     
     /* Set initial background color with bounds checking */
