@@ -74,6 +74,7 @@
 
 /* Common includes */
 #include <stdlib.h>
+#include <unistd.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <errno.h>
@@ -3027,6 +3028,7 @@ void editorSetStatusMessage(const char *fmt, ...) {
     vsnprintf(E.statusmsg,sizeof(E.statusmsg),fmt,ap);
     va_end(ap);
     E.statusmsg_time = time(NULL);
+    sleep(3); /* Sleep to allow the message to be displayed and the user can see it*/
 }
 
 /* =============================== Find mode ================================ */
