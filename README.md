@@ -440,11 +440,31 @@ xsh> command 2>&1 | tee log.txt     # Show output and save to file
 
 ## Demo
 
-A quick look at XShell in action:
+A comprehensive look at XShell and XCodex in action:
 
+### XShell Terminal Interface
 ![XShell Demo](demo/XShell.jpg)
+*XShell's main terminal interface showing the enhanced prompt, command execution, and system integration*
 
+### XCodex Text Editor
+![XCodex Editor](demo/XCODEX.jpg)
+*XCodex modal text editor with syntax highlighting, themes, and professional editing capabilities*
+
+### Smart Autocompletion System
+![XCodex Autocompletion](demo/XCODEX_autocomplition.jpg)
+*Intelligent autocompletion with context-aware suggestions and fuzzy matching*
+
+### Interactive Help System
+![XShell Help](demo/XShell_help.jpg)
+*Built-in help system with command documentation and usage examples*
+
+### Advanced Command History
+![XShell History](demo/XShell_history.jpg)
+*Enhanced command history with search, filtering, and smart suggestions*
+
+### Video Demo
 [Watch the full video demo (MP4)](demo/XShell_Demo.mp4)
+*Complete walkthrough of XShell features and capabilities*
 
 ---
 
