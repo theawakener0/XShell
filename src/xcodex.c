@@ -1,6 +1,6 @@
 // This file is part of the XShell project, a simple terminal editor based on kilo
 
-#define XCODEX_VERSION "0.1"
+#define XCODEX_VERSION "0.2.1"
 
 /* ============================ XCodex Modal System ============================ */
 
@@ -47,6 +47,8 @@
     #define STDIN_FILENO 0
     #define STDOUT_FILENO 1
     #define STDERR_FILENO 2
+    #define access _access
+    #define F_OK 0
     /* Define types that Windows doesn't have */
     #ifndef _SSIZE_T_DEFINED
     typedef long long ssize_t;
@@ -87,6 +89,7 @@
 #include "xcodex_types.h"
 #include "syntax.h"
 #include "themes.h"
+#include "config.h"
 
 /* Plugin system includes - conditional compilation */
 #ifdef XCODEX_ENABLE_LUA
@@ -202,6 +205,10 @@ void editorInsertRow(int at, char *s, size_t len);
 void editorDelRow(int at);
 char* editorRowsToString(int *buflen);
 
+/* Theme management function declarations */
+int xcodex_get_theme_index(const char *theme_name);
+const char* xcodex_get_theme_name(int index);
+
 /* Forward declarations that need erow */
 void editorRowDelChar(erow *row, int at);
 void editorUpdateRow(erow *row);
@@ -239,6 +246,22 @@ typedef struct hlcolor {
 #define UNDO_STACK_SIZE     100
 
 struct editorConfig E;
+
+/* Global configuration settings that aren't part of the editor structure */
+static int global_syntax_highlighting = 1;
+static int global_show_status_bar = 1;
+static int global_search_highlight = 1;
+static int global_auto_indent = 1;
+static int global_modal_editing = 1;
+static int global_tab_size = 4;
+
+/* Accessor functions for global settings */
+int xcodex_get_syntax_highlighting(void) { return global_syntax_highlighting; }
+int xcodex_get_show_status_bar(void) { return global_show_status_bar; }
+int xcodex_get_search_highlight(void) { return global_search_highlight; }
+int xcodex_get_auto_indent(void) { return global_auto_indent; }
+int xcodex_get_modal_editing(void) { return global_modal_editing; }
+int xcodex_get_tab_size(void) { return global_tab_size; }
 
 /*Maps syntax highlight token types to themed colors*/
 int editorSyntaxToColor(int hl) {
@@ -282,6 +305,35 @@ void editorCycleTheme(void) {
                         themes[current_theme].name,
                         current_theme + 1,
                         NUM_THEMES);
+}
+
+/* Enhanced theme name-to-index mapping function */
+int xcodex_get_theme_index(const char *theme_name) {
+    if (!theme_name) return 0; // Default to first theme
+    
+    // Map theme names to indices:
+    // Index 0: "xcodex_dark" (default dark theme)
+    // Index 1: "xcodex_light" (light theme) 
+    // Index 2: "gruvbox_dark" (retro dark theme)
+    // Index 3: "tokyo_night_dark" (modern dark blue)
+    // Index 4: "tokyo_night_light" (light variant)
+    // Index 5: "tokyo_night_storm" (storm variant)
+    
+    for (int i = 0; i < NUM_THEMES; i++) {
+        if (strcmp(theme_name, themes[i].name) == 0) {
+            return i;
+        }
+    }
+    
+    return -1; // Theme not found
+}
+
+/* Get theme name by index (for validation) */
+const char* xcodex_get_theme_name(int index) {
+    if (index >= 0 && index < NUM_THEMES) {
+        return themes[index].name;
+    }
+    return NULL;
 }
 
 /* Calculate line number width based on total number of rows - Memory efficient */
@@ -2095,12 +2147,14 @@ void editorSetBackgroundColor(int color) {
         /* Reset to default background */
         xcodex_write(STDOUT_FILENO, "\x1b[49m\x1b[2J\x1b[H", 12);
     } else {
-        /* Set 256-color background */
+        /* Set 256-color background and clear screen to apply it */
         char bg_buf[32];
         int len = snprintf(bg_buf, sizeof(bg_buf), "\x1b[48;5;%dm\x1b[2J\x1b[H", color);
         if (len > 0 && len < sizeof(bg_buf)) {
             xcodex_write(STDOUT_FILENO, bg_buf, len);
         }
+        /* Force flush to ensure immediate application */
+        fflush(stdout);
     }
 }
 
@@ -3484,6 +3538,78 @@ void xcodex_process_normal_mode(int c, int *quit_times, int fd) {
             /* Just refresh the screen as side effect */
             break;
             
+        case CTRL_R:  /* Reload configuration */
+            {
+                // Reload configuration files
+                config_free(&xcodex_config);
+                config_init(&xcodex_config);
+                config_load_defaults(&xcodex_config, "xcodex");
+                
+                // Try to load from user's home directory first
+                char config_path[512];
+                const char *home = getenv("HOME");
+                if (!home) {
+#ifdef _WIN32
+                    home = getenv("USERPROFILE");
+#endif
+                }
+                
+                if (home) {
+#ifdef _WIN32
+                    snprintf(config_path, sizeof(config_path), "%s\\%s", home, XCODEX_CONFIG_FILE);
+#else
+                    snprintf(config_path, sizeof(config_path), "%s/%s", home, XCODEX_CONFIG_FILE);
+#endif
+                    // Try home directory first, fallback to current directory
+                    if (access(config_path, F_OK) == 0) {
+                        config_load_file(&xcodex_config, config_path);
+                    } else {
+                        config_load_file(&xcodex_config, XCODEX_CONFIG_FILE);
+                    }
+                } else {
+                    // Fallback to current directory if no home found
+                    config_load_file(&xcodex_config, XCODEX_CONFIG_FILE);
+                }
+                
+                // Reapply configuration settings
+                const char *theme_name = config_get(&xcodex_config, "theme");
+                if (theme_name) {
+                    int theme_found = 0;
+                    for (int i = 0; i < NUM_THEMES; i++) {
+                        if (strcmp(theme_name, themes[i].name) == 0) {
+                            current_theme = i;
+                            theme_found = 1;
+                            break;
+                        }
+                    }
+                    
+                    if (theme_found) {
+                        editorSetBackgroundColor(themes[current_theme].bg_color);
+                        editorSetStatusMessage("Configuration reloaded - Applied theme: %s", theme_name);
+                    } else {
+                        editorSetStatusMessage("Configuration reloaded - Unknown theme: %s", theme_name);
+                    }
+                } else {
+                    editorSetStatusMessage("Configuration reloaded");
+                }
+                
+                // Update other settings
+                E.show_line_numbers = config_get_bool(&xcodex_config, "line_numbers", 1);
+                global_syntax_highlighting = config_get_bool(&xcodex_config, "syntax_highlighting", 1);
+                global_show_status_bar = config_get_bool(&xcodex_config, "show_status_bar", 1);
+                global_search_highlight = config_get_bool(&xcodex_config, "search_highlight", 1);
+                global_auto_indent = config_get_bool(&xcodex_config, "auto_indent", 1);
+                global_modal_editing = config_get_bool(&xcodex_config, "modal_editing", 1);
+                
+                int tab_size = config_get_int(&xcodex_config, "tab_size", 4);
+                if (tab_size >= 1 && tab_size <= 16) {
+                    global_tab_size = tab_size;
+                }
+                
+                editorUpdateLineNumberWidth();
+            }
+            break;
+            
         /* ==== Screen Movement ==== */
         case PAGE_UP:
         case PAGE_DOWN:
@@ -4309,6 +4435,57 @@ void handleSigWinCh(int unused __attribute__((unused))) {
 #endif
 
 void initEditor(void) {
+    /* Initialize configuration system first - ensure it's always loaded */
+    config_init(&xcodex_config);
+    config_load_defaults(&xcodex_config, "xcodex");
+    
+    /* Try to load configuration file from user's home directory first */
+    char config_path[512];
+    const char *home = getenv("HOME");
+    if (!home) {
+#ifdef _WIN32
+        home = getenv("USERPROFILE");
+#endif
+    }
+    
+    int config_loaded = 0;
+    if (home) {
+#ifdef _WIN32
+        snprintf(config_path, sizeof(config_path), "%s\\%s", home, XCODEX_CONFIG_FILE);
+#else
+        snprintf(config_path, sizeof(config_path), "%s/%s", home, XCODEX_CONFIG_FILE);
+#endif
+        
+        /* Try to load from home directory first */
+        if (access(config_path, F_OK) == 0) {
+            if (config_load_file(&xcodex_config, config_path) == 0) {
+                config_loaded = 1;
+            }
+        }
+    }
+    
+    /* If not loaded from home directory, try current directory */
+    if (!config_loaded) {
+        if (config_load_file(&xcodex_config, XCODEX_CONFIG_FILE) != 0) {
+            /* Configuration file doesn't exist anywhere, create default one in home directory */
+            if (home) {
+#ifdef _WIN32
+                snprintf(config_path, sizeof(config_path), "%s\\%s", home, XCODEX_CONFIG_FILE);
+#else
+                snprintf(config_path, sizeof(config_path), "%s/%s", home, XCODEX_CONFIG_FILE);
+#endif
+                if (config_save_file(&xcodex_config, config_path) == 0) {
+                    editorSetStatusMessage("Created default configuration file: %s", config_path);
+                }
+            } else {
+                /* Fallback to current directory if no home found */
+                if (config_save_file(&xcodex_config, XCODEX_CONFIG_FILE) == 0) {
+                    editorSetStatusMessage("Created default configuration file: %s", XCODEX_CONFIG_FILE);
+                }
+            }
+        }
+    }
+    
     E.cx = 0;
     E.cy = 0;
     E.rowoff = 0;
@@ -4320,6 +4497,67 @@ void initEditor(void) {
     E.syntax = NULL;
     E.show_line_numbers = 1;        /* Line numbers ON by default */
     E.line_numbers_width = 0;
+    
+    /* Apply configuration settings using enhanced typed system */
+    E.show_line_numbers = config_get_bool(&xcodex_config, "line_numbers", 1);
+    
+    /* Initialize global configuration settings */
+    global_syntax_highlighting = config_get_bool(&xcodex_config, "syntax_highlighting", 1);
+    global_show_status_bar = config_get_bool(&xcodex_config, "show_status_bar", 1);
+    global_search_highlight = config_get_bool(&xcodex_config, "search_highlight", 1);
+    global_auto_indent = config_get_bool(&xcodex_config, "auto_indent", 1);
+    global_modal_editing = config_get_bool(&xcodex_config, "modal_editing", 1);
+    
+    /* Numeric settings with bounds checking */
+    int tab_size = config_get_int(&xcodex_config, "tab_size", 4);
+    if (tab_size >= 1 && tab_size <= 16) {
+        global_tab_size = tab_size;
+    } else {
+        global_tab_size = 4; /* fallback to default */
+    }
+    
+    /* Set undo system capacity based on configuration */
+    int undo_levels = config_get_int(&xcodex_config, "undo_levels", 100);
+    if (undo_levels >= 1 && undo_levels <= 100) {
+        E.undo_capacity = undo_levels;
+    } else {
+        E.undo_capacity = 100; /* fallback to maximum */
+    }
+    
+    /* Theme application with enhanced validation and mapping */
+    const char *theme_name = config_get(&xcodex_config, "theme");
+    if (theme_name) {
+        // Use helper function for theme name-to-index mapping
+        int theme_index = xcodex_get_theme_index(theme_name);
+        
+        if (theme_index >= 0) {
+            current_theme = theme_index;
+            editorSetStatusMessage("✅ Applied theme: %s (index %d)", theme_name, theme_index);
+        } else {
+            // Enhanced error message with complete theme list
+            printf("⚠️  Unknown theme '%s'. Available themes:\n", theme_name);
+            for (int i = 0; i < NUM_THEMES; i++) {
+                printf("  %d: %s%s\n", i, themes[i].name, (i == 0) ? " (default)" : "");
+            }
+            current_theme = 0; // Fallback to xcodex_dark (index 0)
+            editorSetStatusMessage("🔄 Fallback to default theme: %s", themes[0].name);
+        }
+    } else {
+        // No theme configured, use default
+        current_theme = 0; // Default to xcodex_dark (index 0)
+        editorSetStatusMessage("🎨 Using default theme: %s", themes[0].name);
+    }
+    
+    /* Apply the background color for the current theme - critical for theme application */
+    if (current_theme >= 0 && current_theme < NUM_THEMES) {
+        editorSetBackgroundColor(themes[current_theme].bg_color);
+        /* Force clear screen to apply background */
+        char clear_buf[16];
+        int len = snprintf(clear_buf, sizeof(clear_buf), "\x1b[2J\x1b[H");
+        if (len > 0 && len < sizeof(clear_buf)) {
+            xcodex_write(STDOUT_FILENO, clear_buf, len);
+        }
+    }
     
     /* Initialize modal system */
     xcodex_init_modal_system();
@@ -4342,7 +4580,7 @@ void initEditor(void) {
     signal(SIGPIPE, SIG_IGN);
 #endif
     
-    /* Set initial background color with bounds checking */
+    /* Ensure background color is applied again after all initialization */
     if (current_theme >= 0 && current_theme < NUM_THEMES) {
         editorSetBackgroundColor(themes[current_theme].bg_color);
     }
@@ -4401,7 +4639,7 @@ int xcodex_main(int argc, char **argv) {
     }
     
     editorSetStatusMessage(
-        "Ctrl-S = save | Ctrl-Q = quit | Ctrl-F = find | Ctrl-T = theme | Ctrl-N = line num");
+        "Ctrl-S = save | Ctrl-Q = quit | Ctrl-F = find | Ctrl-T = theme | Ctrl-N = line num | Ctrl-R = reload config");
     
     while(!E.quit_requested) {
         editorRefreshScreen();

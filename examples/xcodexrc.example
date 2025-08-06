@@ -1,0 +1,53 @@
+# XCodex Configuration File  
+# Format: key=value
+# Lines starting with # are comments
+
+# Core editor features
+line_numbers=true
+syntax_highlighting=true
+theme=gruvbox_dark
+show_status_bar=true
+
+# Modal editing (vim-like interface)
+modal_editing=true
+undo_levels=100
+
+# Editor behavior  
+search_highlight=true
+auto_indent=true
+tab_size=4
+
+# Available themes (from themes.c):
+# xcodex_dark, xcodex_light, gruvbox_dark, tokyo_night_dark, 
+# tokyo_night_light, tokyo_night_storm
+
+# Key Features:
+# - Modal editing: Normal, Insert, Visual, Command modes
+# - Vim-like navigation: h/j/k/l, w/b for word movement, gg/G for file navigation
+# - Search: / for forward search, ? for backward search
+# - Visual selection: v for character-wise, V for line-wise
+# - Undo/Redo: u for undo (up to 100 levels)
+# - File operations: Ctrl-S to save, Ctrl-Q to quit
+# - Theme switching: Ctrl-T to cycle themes
+# - Line numbers: Ctrl-N to toggle
+
+# Modal Modes:
+# NORMAL   - Navigate and execute commands (default)
+# INSERT   - Insert text (i, a, o to enter)
+# VISUAL   - Select text (v key)
+# COMMAND  - Execute commands (:w, :q, etc.)
+
+# Additional settings you can configure:
+# line_numbers=false           # Hide line numbers
+# syntax_highlighting=false    # Disable syntax highlighting  
+# modal_editing=false          # Disable vim-like modes
+# search_highlight=false       # Don't highlight search matches
+# auto_indent=false            # Disable auto-indentation
+# tab_size=2                   # 2-space tabs
+# tab_size=8                   # 8-space tabs
+# show_status_bar=false        # Hide status bar
+# undo_levels=50               # Reduce undo levels (max 100)
+
+# Supported file types with syntax highlighting:
+# C (.c, .h), Python (.py), JavaScript (.js), HTML (.html), 
+# CSS (.css), and many more

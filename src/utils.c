@@ -1,6 +1,9 @@
 #include "utils.h"
+#include "config.h"
+#include "history.h" // For history_count
 #include <stdio.h>
 #include <string.h>
+#include <ctype.h> // For tolower
 
 #ifdef _WIN32
 #include <windows.h> // For Sleep(), GetUserName(), FindFirstFile, etc.
@@ -30,6 +33,25 @@ void print_slow(const char *text, unsigned int delay_ms) {
 
 char* build_prompt(void) {
     static char prompt[XSH_MAXLINE];
+    
+    // Get configured prompt and style
+    const char *configured_prompt = config_get_default(&xshell_config, "prompt", "xsh@{user}:{cwd}:{history}> ");
+    const char *prompt_style = config_get_default(&xshell_config, "prompt_style", "enhanced");
+    
+    // Handle different prompt styles
+    if (strcmp(prompt_style, "simple") == 0) {
+        strcpy(prompt, "xsh> ");
+        return prompt;
+    } else if (strcmp(prompt_style, "custom") == 0) {
+        // If custom style and no placeholders, use directly
+        if (strstr(configured_prompt, "{") == NULL) {
+            strncpy(prompt, configured_prompt, XSH_MAXLINE - 1);
+            prompt[XSH_MAXLINE - 1] = '\0';
+            return prompt;
+        }
+    }
+    
+    // For enhanced style or custom with placeholders, build dynamic prompt
     char cwd[XSH_MAXLINE];
     char short_cwd[XSH_MAXLINE];
     char username[XSH_MAXLINE];
@@ -81,10 +103,79 @@ char* build_prompt(void) {
         strcpy(short_cwd, cwd);
     }
     
-    sprintf(prompt, "\x1b[1;36mxsh\x1b[0m@\x1b[1;35m%s\x1b[0m:\x1b[32m%s\x1b[0m:\x1b[33m%d\x1b[0m> ", 
-            username, short_cwd, history_count+1);
+    // Handle placeholder substitution for custom prompts
+    if (strstr(configured_prompt, "{") != NULL) {
+        char temp_prompt[XSH_MAXLINE];
+        strcpy(temp_prompt, configured_prompt);
+        
+        // Replace {user} placeholder
+        char *user_pos = strstr(temp_prompt, "{user}");
+        if (user_pos) {
+            char before[XSH_MAXLINE], after[XSH_MAXLINE];
+            *user_pos = '\0';
+            strcpy(before, temp_prompt);
+            strcpy(after, user_pos + 6); // Skip "{user}"
+            snprintf(temp_prompt, sizeof(temp_prompt), "%s%s%s", before, username, after);
+        }
+        
+        // Replace {cwd} placeholder
+        char *cwd_pos = strstr(temp_prompt, "{cwd}");
+        if (cwd_pos) {
+            char before[XSH_MAXLINE], after[XSH_MAXLINE];
+            *cwd_pos = '\0';
+            strcpy(before, temp_prompt);
+            strcpy(after, cwd_pos + 5); // Skip "{cwd}"
+            snprintf(temp_prompt, sizeof(temp_prompt), "%s%s%s", before, short_cwd, after);
+        }
+        
+        // Replace {history} placeholder
+        char *hist_pos = strstr(temp_prompt, "{history}");
+        if (hist_pos) {
+            char before[XSH_MAXLINE], after[XSH_MAXLINE];
+            *hist_pos = '\0';
+            strcpy(before, temp_prompt);
+            strcpy(after, hist_pos + 9); // Skip "{history}"
+            snprintf(temp_prompt, sizeof(temp_prompt), "%s%d%s", before, history_count+1, after);
+        }
+        
     
-    return prompt;
+        // Default enhanced prompt with proper theme-based colors
+        int color_output = config_get_bool(&xshell_config, "color_output", 1);
+        if (color_output) {
+            // Enhanced colored prompt with theme-based colors
+            const char *theme = config_get_default(&xshell_config, "theme", "default");
+            
+            if (strcmp(theme, "gruvbox_dark") == 0) {
+                // Gruvbox dark theme colors
+                sprintf(prompt, "\x1b[38;5;208mxsh\x1b[0m@\x1b[38;5;142m%s\x1b[0m:\x1b[38;5;109m%s\x1b[0m:\x1b[38;5;214m%d\x1b[0m> ", 
+                        username, short_cwd, history_count+1);
+            } else if (strcmp(theme, "tokyo_night") == 0) {
+                // Tokyo night theme colors
+                sprintf(prompt, "\x1b[38;5;111mxsh\x1b[0m@\x1b[38;5;146m%s\x1b[0m:\x1b[38;5;115m%s\x1b[0m:\x1b[38;5;222m%d\x1b[0m> ", 
+                        username, short_cwd, history_count+1);
+            } else if (strcmp(theme, "light") == 0) {
+                // Light theme colors (darker colors for visibility)
+                sprintf(prompt, "\x1b[38;5;24mxsh\x1b[0m@\x1b[38;5;88m%s\x1b[0m:\x1b[38;5;28m%s\x1b[0m:\x1b[38;5;94m%d\x1b[0m> ", 
+                        username, short_cwd, history_count+1);
+            } else {
+                // Default theme colors (cyan, magenta, green, yellow)
+                sprintf(prompt, "\x1b[1;36mxsh\x1b[0m@\x1b[1;35m%s\x1b[0m:\x1b[32m%s\x1b[0m:\x1b[33m%d\x1b[0m> ", 
+                        username, short_cwd, history_count+1);
+            }
+        } else {
+            sprintf(prompt, "xsh@%s:%s:%d> ", username, short_cwd, history_count+1);
+        }
+        
+        return prompt;
+    } else {
+        // If no placeholders, use the configured prompt directly
+        const char *configured_prompt = config_get(&xshell_config, "prompt");
+        if (configured_prompt) {
+            snprintf(prompt, sizeof(prompt), "%s", configured_prompt);
+        } else {
+            snprintf(prompt, sizeof(prompt), "xsh@%s:%s:%d> ", username, short_cwd, history_count+1);
+        }
+    }
 }
 
 // Helper function for case-insensitive strstr

@@ -1,0 +1,43 @@
+# XShell Configuration File
+# Format: key=value
+# Lines starting with # are comments
+
+# Shell prompt appearance
+prompt=xsh@{user}:{cwd}:{history}> 
+prompt_style=enhanced
+
+# History settings (currently limited to 100 entries in XSH_HISTORY_SIZE)
+history_size=100
+save_history=true
+
+# Auto-completion settings (TAB key completion for commands and files)
+auto_complete=true
+case_sensitive=false
+
+# Display settings
+color_output=true
+theme=default
+startup_banner=true
+
+# Built-in Commands Available:
+# cd, pwd, ls, grep, echo, mkdir, touch, cp, mv, rm, cat
+# xmanifesto, xproj, xnote, xpass, xeno, xnet, xscan, xcodex, xcrypt
+# config, history, help, clear, exit
+
+# Additional settings you can configure:
+# prompt=$ 
+# prompt=[XShell]$ 
+# prompt={user}@host:{cwd}$ 
+# prompt_style=simple           # Just 'xsh> '
+# prompt_style=custom           # Use your own prompt format
+# history_size=50               # Reduce history (max 100)
+# auto_complete=false           # Disable TAB completion
+# case_sensitive=true           # Case sensitive matching
+# color_output=false            # Plain text prompt
+# startup_banner=false          # Skip ASCII art banner
+
+# Prompt placeholders (for enhanced or custom styles):
+# {user} - current username, {cwd} - current directory, {history} - command number
+
+# Note: XShell supports command history, tab completion, 
+# and pipeline operations with | & && || operators

@@ -18,6 +18,7 @@
 #include "xscan.h"
 #include "xcodex.h" // For xsh_xcodex (text editor command, POSIX only)
 #include "xcrypt.h" // For xsh_xcrypt (file encryption/decryption tool)
+#include "config.h" // For configuration management
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -32,7 +33,7 @@
 // Built-in command names
 char *builtin_str[] = {
     "cd", "pwd", "ls", "grep", "echo", "mkdir", "touch", "cp", "mv",
-    "rm", "cat", "xmanifesto", "xproj", "xnote", "xpass", "xeno", "xnet", "xscan", "xcodex", "xcrypt", "history", "help", "clear", "exit"
+    "rm", "cat", "xmanifesto", "xproj", "xnote", "xpass", "xeno", "xnet", "xscan", "xcodex", "xcrypt", "config", "history", "stats", "analytics", "cleardata", "help", "clear", "exit"
 };
 
 // Descriptions for built-in commands (for help)
@@ -57,7 +58,11 @@ char *builtin_desc[] = {
     "Custom Port Scanner",
     "XCodex (Xenomench Codex) - A built-in code editor",
     "Simple file encryption/decryption tool",
+    "Easy-to-use configuration management for XShell and XCodex",
     "Show command history",
+    "Show command statistics and analytics",
+    "Display comprehensive performance analytics",
+    "Clear all analytics and learning data",
     "Display help information about available commands",
     "Clear the terminal screen",
     "Exit the shell program"
@@ -83,9 +88,13 @@ char *builtin_usage[] = {
     "Usage: xeno [hostname] [port]  (Note: Actual arguments depend on client implementation)",
     "Usage: xnet [show|ping|traceroute] [host]",
     "Usage: xscan <target IP> <start port> [end port]",
-    "Usage: xsh_xcodex <file_name>",
+    "Usage: xcodex <file_name>",
     "Usage: xcrypt <encrypt|decrypt> <input_file> <output_file>\nNote: 'encrypt' and 'decrypt' use the same symmetric XOR operation.",
+    "Usage: config [command] [options]\nPopular commands:\n  show                 - Display current settings\n  get <setting>        - Get a setting value\n  set <setting> <val>  - Change a setting\n  save                 - Save changes to file\n  help                 - Show detailed help",
     "Usage: history",
+    "Usage: stats [command_name]",
+    "Usage: analytics",
+    "Usage: cleardata",
     "Usage: help [command]",
     "Usage: clear",
     "Usage: exit"
@@ -96,11 +105,35 @@ int (*builtin_func[])(char **) = {
     &xsh_cd, &xsh_pwd, &xsh_ls, &xsh_grep, &xsh_echo, &xsh_mkdir, &xsh_touch,
     &xsh_cp, &xsh_mv, &xsh_rm, &xsh_cat, &xsh_manifesto, &xsh_xproj, &xsh_xnote,
     &xsh_xpass, &xsh_client, &xsh_xnet, &xsh_xscan, &xsh_xcodex, &xsh_xcrypt,
-    &xsh_history, &xsh_help, &xsh_clear, &xsh_exit
+    &xsh_config, &xsh_history, &xsh_stats, &xsh_analytics, &xsh_cleardata, &xsh_help, &xsh_clear, &xsh_exit
 };
 
 int xsh_num_builtins() {
     return sizeof(builtin_str) / sizeof(char *);
+}
+
+// Check if a command is a built-in
+int xsh_builtin_exists(const char *command) {
+    if (!command) return 0;
+    
+    for (int i = 0; i < xsh_num_builtins(); i++) {
+        if (strcmp(command, builtin_str[i]) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// Execute a built-in command
+int xsh_execute_builtin(char **args) {
+    if (!args || !args[0]) return 1;
+    
+    for (int i = 0; i < xsh_num_builtins(); i++) {
+        if (strcmp(args[0], builtin_str[i]) == 0) {
+            return (*builtin_func[i])(args);
+        }
+    }
+    return 1; // Command not found
 }
 
 // Implementations of built-in functions
@@ -331,7 +364,6 @@ int xsh_cat(char **args) {
             fputs(line, stdout);
         }
         printf("\n");
-         
         if (ferror(fp)) {
             fprintf(stderr, "xsh: cat: error reading file '%s'\n", args[i]);
         }
@@ -597,5 +629,565 @@ int xsh_help(char **args) {
 int xsh_exit(char **args) {
     printf("Exiting XShell. Goodbye!\n");
     return 0; // Signal to terminate the shell loop
+}
+
+// Configuration management command
+int xsh_config(char **args) {
+    if (!args[1]) {
+        printf("\n\x1b[1;36m🔧 XShell Configuration Manager\x1b[0m\n");
+        printf("═══════════════════════════════════\n\n");
+        
+        printf("\x1b[1;32m📋 Basic Commands:\x1b[0m\n");
+        printf("  config show                    - Show current settings\n");
+        printf("  config get <key>               - Get a setting value\n");
+        printf("  config set <key> <value>       - Change a setting\n");
+        printf("  config save                    - Save changes to file\n\n");
+        
+        printf("\x1b[1;33m� Examples:\x1b[0m\n");
+        printf("  config set prompt_style simple\n");
+        printf("  config set history_size 50\n");
+        printf("  config get theme\n");
+        printf("  config show\n\n");
+        
+        printf("\x1b[1;37m💡 Tip:\x1b[0m Add 'xcodex' to work with XCodex settings\n");
+        printf("       Example: config show xcodex\n\n");
+        return 1;
+    }
+    
+    char *command = args[1];
+    config_t *config = &xshell_config; // Default to xshell
+    char *config_name = "xshell";
+    
+    // Check if last argument is xcodex
+    int argc = 0;
+    while (args[argc]) argc++; // Count arguments
+    
+    if (argc > 2 && strcmp(args[argc-1], "xcodex") == 0) {
+        config = &xcodex_config;
+        config_name = "xcodex";
+    }
+    
+    // Show command
+    if (strcmp(command, "show") == 0 || strcmp(command, "list") == 0) {
+        printf("\n\x1b[1;36m⚙️  %s Configuration\x1b[0m\n", 
+                strcmp(config_name, "xshell") == 0 ? "XShell" : "XCodex");
+        printf("═══════════════════════════════════\n");
+        
+        if (config->count == 0) {
+            printf("\x1b[1;33m⚠️  No configuration found.\x1b[0m\n\n");
+            return 1;
+        }
+        
+        for (int i = 0; i < config->count; i++) {
+            printf("  %-20s = %s\n", config->pairs[i].key, config->pairs[i].value);
+        }
+        printf("\n");
+        return 1;
+    }
+    
+    // Get command
+    if (strcmp(command, "get") == 0) {
+        if (!args[2]) {
+            printf("\x1b[1;31m❌ Usage: config get <key>\x1b[0m\n\n");
+            return 1;
+        }
+        
+        const char *value = config_get(config, args[2]);
+        if (value) {
+            printf("%s = %s\n", args[2], value);
+        } else {
+            printf("\x1b[1;33m⚠️  Key '%s' not found in %s configuration\x1b[0m\n", args[2], config_name);
+        }
+        return 1;
+    }
+    
+    // Set command
+    if (strcmp(command, "set") == 0) {
+        if (!args[2] || !args[3]) {
+            printf("\x1b[1;31m❌ Usage: config set <key> <value>\x1b[0m\n\n");
+            return 1;
+        }
+        
+        if (config_set(config, args[2], args[3]) == 0) {
+            printf("\x1b[1;32m✅ Set %s = %s\x1b[0m\n", args[2], args[3]);
+            
+            // Special handling for XCodex theme changes with validation
+            if (strcmp(config_name, "xcodex") == 0 && strcmp(args[2], "theme") == 0) {
+                const char *valid_themes[] = {
+                    "xcodex_dark", "xcodex_light", "gruvbox_dark", 
+                    "tokyo_night_dark", "tokyo_night_light", "tokyo_night_storm"
+                };
+                int theme_valid = 0;
+                for (int i = 0; i < 6; i++) {
+                    if (strcmp(args[3], valid_themes[i]) == 0) {
+                        theme_valid = 1;
+                        break;
+                    }
+                }
+                
+                if (theme_valid) {
+                    printf("\x1b[1;32m✅ XCodex theme '%s' applied successfully\x1b[0m\n", args[3]);
+                    printf("💡 Start XCodex to see the new theme in action\n");
+                } else {
+                    printf("\x1b[1;33m⚠️  Theme '%s' not found. Available XCodex themes:\x1b[0m\n", args[3]);
+                    for (int i = 0; i < 6; i++) {
+                        printf("   - %s\n", valid_themes[i]);
+                    }
+                }
+            }
+            // Special handling for XShell theme changes - apply immediately with better preview
+            else if (strcmp(config_name, "xshell") == 0 && strcmp(args[2], "theme") == 0) {
+                printf("\x1b[1;34m🎨 Applying XShell theme '%s'...\x1b[0m\n", args[3]);
+                // Show immediate preview of new theme
+                char *preview_prompt = build_prompt();
+                printf("New prompt preview: %s\x1b[0m[PREVIEW]\n", preview_prompt);
+                printf("\x1b[1;32m✅ XShell theme applied! Changes take effect immediately.\x1b[0m\n");
+            }
+            // Special handling for prompt changes
+            else if (strcmp(config_name, "xshell") == 0 && 
+                    (strcmp(args[2], "prompt") == 0 || strcmp(args[2], "prompt_style") == 0 || strcmp(args[2], "color_output") == 0)) {
+                printf("\x1b[1;34m📋 Updating prompt...\x1b[0m\n");
+                char *preview_prompt = build_prompt();
+                printf("New prompt preview: %s\x1b[0m[RESET]\n", preview_prompt);
+            }
+            
+            printf("\x1b[2m💡 Use 'config save' to make this change permanent\x1b[0m\n\n");
+        } else {
+            printf("\x1b[1;31m❌ Failed to set '%s' to '%s'\x1b[0m\n", args[2], args[3]);
+            printf("💡 Check if the value is valid for this setting type\n\n");
+        }
+        return 1;
+    }
+    
+    // Save command
+    if (strcmp(command, "save") == 0) {
+        char home_path[512];
+        const char *home = getenv("HOME");
+        if (!home) {
+#ifdef _WIN32
+            home = getenv("USERPROFILE");
+#endif
+        }
+        
+        if (!home) {
+            printf("\x1b[1;31m❌ Could not determine home directory\x1b[0m\n");
+            return 1;
+        }
+        
+        const char *filename = strcmp(config_name, "xshell") == 0 ? XSHELL_CONFIG_FILE : XCODEX_CONFIG_FILE;
+        
+#ifdef _WIN32
+        snprintf(home_path, sizeof(home_path), "%s\\%s", home, filename);
+#else
+        snprintf(home_path, sizeof(home_path), "%s/%s", home, filename);
+#endif
+        
+        if (config_save_file(config, home_path) == 0) {
+            printf("\x1b[1;32m✅ Saved %s configuration to %s\x1b[0m\n", config_name, home_path);
+        } else {
+            printf("\x1b[1;31m❌ Failed to save configuration\x1b[0m\n");
+        }
+        return 1;
+    }
+    else if (strcmp(command, "reset") == 0) {
+        if (!args[2]) {
+            printf("\x1b[1;31m❌ Missing setting name\x1b[0m\n");
+            printf("Usage: config reset <setting_name> [xshell|xcodex]\n");
+            printf("Example: config reset theme\n\n");
+            return 1;
+        }
+        
+        if (config_remove(config, args[2]) == 0) {
+            printf("\x1b[1;32m♻️  Reset '%s' to default value\x1b[0m\n\n", args[2]);
+        } else {
+            printf("\x1b[1;31m❌ Setting '%s' not found\x1b[0m\n\n", args[2]);
+        }
+        return 1;
+    }
+    else if (strcmp(command, "backup") == 0) {
+        if (!args[2]) {
+            printf("\x1b[1;31m❌ Missing backup filename\x1b[0m\n");
+            printf("Usage: config backup <filename> [xshell|xcodex]\n");
+            printf("Example: config backup my_backup.ini\n\n");
+            return 1;
+        }
+        printf("\x1b[1;34m💾 Creating backup...\x1b[0m\n");
+        config_backup(config, args[2]);
+        printf("\n");
+    }
+    else if (strcmp(command, "restore") == 0) {
+        if (!args[2]) {
+            printf("\x1b[1;31m❌ Missing backup filename\x1b[0m\n");
+            printf("Usage: config restore <filename> [xshell|xcodex]\n");
+            printf("Example: config restore my_backup.ini\n\n");
+            return 1;
+        }
+        printf("\x1b[1;34m📥 Restoring from backup...\x1b[0m\n");
+        config_restore(config, args[2]);
+        printf("\n");
+    }
+    else if (strcmp(command, "export") == 0) {
+        if (!args[2]) {
+            printf("\x1b[1;31m❌ Missing export filename\x1b[0m\n");
+            printf("Usage: config export <filename> [xshell|xcodex]\n");
+            printf("Example: config export my_settings.ini\n\n");
+            return 1;
+        }
+        
+        printf("\x1b[1;34m📤 Exporting configuration...\x1b[0m\n");
+        if (config_export_ini(config, args[2]) == 0) {
+            printf("\x1b[1;32m✅ Exported %s configuration to %s\x1b[0m\n\n", config_name, args[2]);
+        } else {
+            printf("\x1b[1;31m❌ Failed to export configuration\x1b[0m\n\n");
+        }
+    }
+    else if (strcmp(command, "options") == 0 || strcmp(command, "keys") == 0) {
+        printf("\n\x1b[1;36m⚙️  Available %s Settings\x1b[0m\n", 
+               strcmp(config_name, "xshell") == 0 ? "XShell" : "XCodex");
+        printf("═══════════════════════════════════════\n\n");
+        config_list_available_keys(config_name);
+        printf("\n");
+    }
+    else if (strcmp(command, "status") == 0 || strcmp(command, "validate") == 0) {
+        printf("\n\x1b[1;36m🔍 Configuration Health Check\x1b[0m\n");
+        printf("════════════════════════════════════\n");
+        printf("Checking %s configuration...\n\n", config_name);
+        
+        int errors = 0;
+        int warnings = 0;
+        
+        for (int i = 0; i < config->count; i++) {
+            if (!config_validate_value(config->pairs[i].value, config->pairs[i].type)) {
+                printf("\x1b[1;31m❌ ERROR:\x1b[0m %s = '%s' (invalid type)\n", 
+                       config->pairs[i].key, config->pairs[i].value);
+                errors++;
+            }
+        }
+        
+        if (config->count == 0) {
+            printf("\x1b[1;33m⚠️  WARNING:\x1b[0m No configuration found\n");
+            warnings++;
+        }
+        
+        printf("\n\x1b[1;36m📊 Summary:\x1b[0m\n");
+        printf("Settings: %d\n", config->count);
+        printf("Errors: %s%d\x1b[0m\n", errors > 0 ? "\x1b[1;31m" : "\x1b[1;32m", errors);
+        printf("Warnings: %s%d\x1b[0m\n", warnings > 0 ? "\x1b[1;33m" : "\x1b[1;32m", warnings);
+        
+        if (errors == 0 && warnings == 0) {
+            printf("\n\x1b[1;32m✅ Configuration is healthy!\x1b[0m\n");
+        } else if (errors > 0) {
+            printf("\n\x1b[1;31m❌ Configuration has errors that need fixing\x1b[0m\n");
+        } else {
+            printf("\n\x1b[1;33m⚠️  Configuration has warnings\x1b[0m\n");
+        }
+        printf("\n");
+    }
+    else if (strcmp(command, "init") == 0) {
+        printf("\x1b[1;34m🚀 Creating default configuration files...\x1b[0m\n");
+        if (config_create_default_files() == 0) {
+            printf("\x1b[1;32m✅ Default configuration files created\x1b[0m\n");
+            printf("💡 Use 'config show' to see your new settings\n\n");
+        } else {
+            printf("\x1b[1;31m❌ Failed to create configuration files\x1b[0m\n\n");
+        }
+    }
+    else if (strcmp(command, "help") == 0) {
+        printf("\n\x1b[1;36m📖 XShell Configuration Help\x1b[0m\n");
+        printf("═══════════════════════════════════\n\n");
+        config_show_help(config_name);
+    }
+    else if (strcmp(command, "test") == 0) {
+        printf("\x1b[1;34m🧪 Configuration Test\x1b[0m\n");
+        printf("════════════════════════\n");
+        
+        printf("Testing XShell configuration:\n");
+        printf("  prompt = '%s'\n", config_get_default(&xshell_config, "prompt", "not found"));
+        printf("  prompt_style = '%s'\n", config_get_default(&xshell_config, "prompt_style", "not found"));
+        printf("  color_output = %s\n", config_get_bool(&xshell_config, "color_output", 0) ? "true" : "false");
+        printf("  theme = '%s'\n", config_get_default(&xshell_config, "theme", "not found"));
+        
+        // Test prompt preview with current settings
+        printf("\nPrompt Preview:\n");
+        char *test_prompt = build_prompt();
+        printf("  Current prompt: %s\x1b[0m[RESET]\n", test_prompt);
+        
+        printf("\nTesting XCodex configuration:\n");
+        printf("  theme = '%s'\n", config_get_default(&xcodex_config, "theme", "not found"));
+        printf("  line_numbers = %s\n", config_get_bool(&xcodex_config, "line_numbers", 0) ? "true" : "false");
+        printf("  syntax_highlighting = %s\n", config_get_bool(&xcodex_config, "syntax_highlighting", 0) ? "true" : "false");
+        
+        // Test available themes
+        printf("\nAvailable XShell themes: default, gruvbox_dark, tokyo_night, light\n");
+        printf("Available XCodex themes:\n");
+        const char* xcodex_themes[] = {
+            "xcodex_dark", "xcodex_light", "gruvbox_dark", 
+            "tokyo_night_dark", "tokyo_night_light", "tokyo_night_storm"
+        };
+        for (int i = 0; i < 6; i++) {
+            printf("  - %s%s\n", xcodex_themes[i], (i == 0) ? " (default)" : "");
+        }
+        
+        // Test current colors
+        printf("\nCurrent XShell color test:\n");
+        printf("  Color output: %s\n", config_get_bool(&xshell_config, "color_output", 0) ? "enabled" : "disabled");
+        printf("  Theme: %s\n", config_get_default(&xshell_config, "theme", "default"));
+        printf("  Current prompt: %s\x1b[0m[RESET]\n", build_prompt());
+        
+        printf("\nColor test - XShell themes:\n");
+        const char *old_theme = config_get_default(&xshell_config, "theme", "default");
+        const char *test_themes[] = {"default", "gruvbox_dark", "tokyo_night", "light"};
+        for (int i = 0; i < 4; i++) {
+            config_set(&xshell_config, "theme", test_themes[i]);
+            config_set(&xshell_config, "color_output", "true");
+            char *test_prompt = build_prompt();
+            printf("  %-15s: %s\x1b[0m\n", test_themes[i], test_prompt);
+        }
+        // Restore original theme
+        config_set(&xshell_config, "theme", old_theme);
+        
+        printf("\n");
+    }
+    else if (strcmp(command, "preview") == 0) {
+        if (!args[2]) {
+            printf("\x1b[1;31m❌ Missing preview type\x1b[0m\n");
+            printf("Usage: config preview <type> [xshell|xcodex]\n");
+            printf("Types: themes, prompts, colors\n");
+            printf("Examples:\n");
+            printf("  config preview themes xshell\n");
+            printf("  config preview prompts\n");
+            printf("  config preview colors\n\n");
+            return 1;
+        }
+        
+        if (strcmp(args[2], "themes") == 0) {
+            if (argc > 3 && strcmp(args[argc-1], "xshell") == 0) {
+                printf("\n\x1b[1;36m🎨 XShell Theme Preview\x1b[0m\n");
+                printf("═══════════════════════════\n");
+                
+                // Save current settings
+                const char *current_theme = config_get_default(&xshell_config, "theme", "default");
+                int current_color = config_get_bool(&xshell_config, "color_output", 1);
+                
+                const char *themes[] = {"default", "gruvbox_dark", "tokyo_night", "light"};
+                for (int i = 0; i < 4; i++) {
+                    config_set(&xshell_config, "theme", themes[i]);
+                    config_set(&xshell_config, "color_output", "true");
+                    
+                    char *preview_prompt = build_prompt();
+                    printf("%-15s: %s\x1b[0m[RESET]\n", themes[i], preview_prompt);
+                }
+                
+                // Restore original settings
+                config_set(&xshell_config, "theme", current_theme);
+                config_set(&xshell_config, "color_output", current_color ? "true" : "false");
+                printf("\n💡 Use 'config set theme <name>' to apply a theme\n\n");
+            } else {
+                printf("\n\x1b[1;36m🎨 XCodex Theme Preview\x1b[0m\n");
+                printf("═══════════════════════════\n");
+                printf("Available XCodex themes:\n");
+                printf("  \x1b[48;5;0m\x1b[38;5;37m xcodex_dark     \x1b[0m - Dark theme with purple/blue accents\n");
+                printf("  \x1b[48;5;15m\x1b[38;5;16m xcodex_light    \x1b[0m - Light theme for bright environments\n");
+                printf("  \x1b[48;5;237m\x1b[38;5;223m gruvbox_dark    \x1b[0m - Popular retro-style dark theme\n");
+                printf("  \x1b[48;5;0m\x1b[38;5;111m tokyo_night_dark\x1b[0m - Modern dark blue theme\n");
+                printf("  \x1b[48;5;15m\x1b[38;5;24m tokyo_night_light\x1b[0m - Light variant of Tokyo Night\n");
+                printf("  \x1b[48;5;235m\x1b[38;5;116m tokyo_night_storm\x1b[0m - Darker variant with storm colors\n");
+                printf("\n💡 Use 'config set theme <name> xcodex' to apply a theme\n\n");
+            }
+        } else if (strcmp(args[2], "prompts") == 0) {
+            printf("\n\x1b[1;36m📋 Prompt Style Preview\x1b[0m\n");
+            printf("═══════════════════════════\n");
+            
+            // Save current settings
+            const char *current_style = config_get_default(&xshell_config, "prompt_style", "enhanced");
+            const char *current_prompt = config_get_default(&xshell_config, "prompt", "xsh@{user}:{cwd}:{history}> ");
+            
+            // Preview simple style
+            config_set(&xshell_config, "prompt_style", "simple");
+            char *simple_prompt = build_prompt();
+            printf("simple  : %s\x1b[0m[RESET]\n", simple_prompt);
+            
+            // Preview enhanced style
+            config_set(&xshell_config, "prompt_style", "enhanced");
+            char *enhanced_prompt = build_prompt();
+            printf("enhanced: %s\x1b[0m[RESET]\n", enhanced_prompt);
+            
+            // Preview custom styles
+            config_set(&xshell_config, "prompt_style", "custom");
+            config_set(&xshell_config, "prompt", "[{user}@{cwd}]$ ");
+            char *custom1_prompt = build_prompt();
+            printf("custom 1: %s\x1b[0m[RESET]\n", custom1_prompt);
+            
+            config_set(&xshell_config, "prompt", "{user}:{history}> ");
+            char *custom2_prompt = build_prompt();
+            printf("custom 2: %s\x1b[0m[RESET]\n", custom2_prompt);
+            
+            // Restore original settings
+            config_set(&xshell_config, "prompt_style", current_style);
+            config_set(&xshell_config, "prompt", current_prompt);
+            printf("\n💡 Use 'config set prompt_style <style>' to change style\n");
+            printf("💡 Use 'config set prompt \"<format>\"' for custom prompts\n\n");
+        } else if (strcmp(args[2], "colors") == 0) {
+            printf("\n\x1b[1;36m🌈 Color Preview\x1b[0m\n");
+            printf("═══════════════════\n");
+            printf("Color output ON : ");
+            config_set(&xshell_config, "color_output", "true");
+            char *color_on = build_prompt();
+            printf("%s\x1b[0m[RESET]\n", color_on);
+            
+            printf("Color output OFF: ");
+            config_set(&xshell_config, "color_output", "false");
+            char *color_off = build_prompt();
+            printf("%s[RESET]\n", color_off);
+            
+            // Restore color setting
+            config_set(&xshell_config, "color_output", "true");
+            printf("\n💡 Use 'config set color_output true/false' to toggle colors\n\n");
+        } else {
+            printf("\x1b[1;31m❌ Unknown preview type: %s\x1b[0m\n", args[2]);
+            printf("Available types: themes, prompts, colors\n\n");
+        }
+    }
+    else if (strcmp(command, "debug") == 0) {
+        printf("\x1b[1;31m🔧 Configuration Debug Information\x1b[0m\n");
+        printf("════════════════════════════════════════\n");
+        
+        printf("XShell Configuration State:\n");
+        printf("  Initialized: %s\n", xshell_config.count > 0 ? "Yes" : "No");
+        printf("  Settings count: %d\n", xshell_config.count);
+        printf("  Config file: %s\n", XSHELL_CONFIG_FILE);
+        
+        printf("\nXCodex Configuration State:\n");
+        printf("  Initialized: %s\n", xcodex_config.count > 0 ? "Yes" : "No");
+        printf("  Settings count: %d\n", xcodex_config.count);
+        printf("  Config file: %s\n", XCODEX_CONFIG_FILE);
+        
+        printf("\nPrompt Debug:\n");
+        printf("  Style: %s\n", config_get_default(&xshell_config, "prompt_style", "not found"));
+        printf("  Format: %s\n", config_get_default(&xshell_config, "prompt", "not found"));
+        printf("  Color output: %s\n", config_get_bool(&xshell_config, "color_output", 0) ? "true" : "false");
+        printf("  Theme: %s\n", config_get_default(&xshell_config, "theme", "not found"));
+        
+        printf("\nPrompt Generation Test:\n");
+        char *test_prompt = build_prompt();
+        printf("  Generated: %s\x1b[0m[RESET]\n", test_prompt);
+        
+        printf("\nXCodex Theme Debug:\n");
+        printf("  Theme: %s\n", config_get_default(&xcodex_config, "theme", "not found"));
+        printf("  Line numbers: %s\n", config_get_bool(&xcodex_config, "line_numbers", 0) ? "true" : "false");
+        printf("  Syntax highlighting: %s\n", config_get_bool(&xcodex_config, "syntax_highlighting", 0) ? "true" : "false");
+        
+        printf("\n\x1b[1;36m💡 Issues Found:\x1b[0m\n");
+        if (xshell_config.count == 0) {
+            printf("  ❌ XShell config not loaded - run 'config init'\n");
+        }
+        if (xcodex_config.count == 0) {
+            printf("  ❌ XCodex config not loaded - run 'config init'\n");
+        }
+        if (!config_get_bool(&xshell_config, "color_output", 1)) {
+            printf("  ⚠️  XShell colors disabled - run 'config set color_output true'\n");
+        }
+        printf("\n");
+    }
+    else if (strcmp(command, "reload") == 0) {
+        printf("\x1b[1;34m🔄 Reloading configuration files...\x1b[0m\n");
+        config_free(&xshell_config);
+        config_free(&xcodex_config);
+        config_load_all_files();
+        printf("\x1b[1;32m✅ Configuration reloaded from files\x1b[0m\n\n");
+    }
+    else if (strcmp(command, "defaults") == 0) {
+        printf("\x1b[1;33m⚠️  This will reset ALL %s settings to defaults!\x1b[0m\n", config_name);
+        printf("Are you sure? Type 'yes' to continue: ");
+        
+        char response[10];
+        if (fgets(response, sizeof(response), stdin) != NULL) {
+            // Remove newline
+            response[strcspn(response, "\n")] = 0;
+            
+            if (strcmp(response, "yes") == 0) {
+                if (strcmp(config_name, "xshell") == 0) {
+                    config_free(&xshell_config);
+                    config_init(&xshell_config);
+                    config_load_defaults(&xshell_config, "xshell");
+                } else {
+                    config_free(&xcodex_config);
+                    config_init(&xcodex_config);
+                    config_load_defaults(&xcodex_config, "xcodex");
+                }
+                printf("\x1b[1;32m♻️  Reset %s configuration to defaults\x1b[0m\n", config_name);
+                printf("💡 Use 'config save' to make this permanent\n\n");
+            } else {
+                printf("\x1b[1;33m❌ Reset cancelled\x1b[0m\n\n");
+            }
+        }
+    }
+    else {
+        printf("\x1b[1;31m❌ Unknown command: %s\x1b[0m\n", command);
+        printf("💡 Use 'config' without arguments to see available commands\n");
+        printf("💡 Or use 'config help' for detailed information\n\n");
+    }
+    
+    return 1;
+}
+
+// Enhanced history statistics command
+int xsh_stats(char **args) {
+    if (args[1] == NULL) {
+        // Show general statistics
+        display_performance_analytics();
+    } else {
+        // Show statistics for specific command
+        display_command_stats(args[1]);
+    }
+    return 1;
+}
+
+// Performance analytics display command
+int xsh_analytics(char **args) {
+    if (args[1] == NULL) {
+        display_performance_analytics();
+        display_usage_trends();
+        analyze_command_patterns();
+    } else if (strcmp(args[1], "performance") == 0) {
+        display_performance_analytics();
+    } else if (strcmp(args[1], "trends") == 0) {
+        display_usage_trends();
+    } else if (strcmp(args[1], "patterns") == 0) {
+        analyze_command_patterns();
+    } else {
+        printf("Usage: analytics [performance|trends|patterns]\n");
+        printf("  performance - Show command frequency and performance stats\n");
+        printf("  trends      - Show usage trends over time\n");
+        printf("  patterns    - Show learned command patterns\n");
+        printf("  (no args)   - Show all analytics\n");
+    }
+    return 1;
+}
+
+// Clear analytics data command
+int xsh_cleardata(char **args) {
+    printf("This will clear all command history and analytics data.\n");
+    printf("Are you sure? Type 'yes' to continue: ");
+    
+    char response[10];
+    if (fgets(response, sizeof(response), stdin) != NULL) {
+        // Remove newline
+        response[strcspn(response, "\n")] = 0;
+        
+        if (strcmp(response, "yes") == 0) {
+            // Clear history and analytics data
+            cleanup_history_system();
+            if (init_history_system() == 0) {
+                printf("Analytics data cleared successfully.\n");
+            } else {
+                printf("Warning: Failed to reinitialize history system.\n");
+            }
+        } else {
+            printf("Clear operation cancelled.\n");
+        }
+    }
+    
+    return 1;
 }
 

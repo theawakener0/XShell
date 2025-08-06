@@ -10,9 +10,14 @@
 #include "execute.h"
 #include "history.h"
 #include "utils.h" // For print_slow, build_prompt
+#include "config.h" // For configuration management
+#include <time.h> // For clock timing
 
 #ifdef _WIN32
 #include <windows.h> // For enabling ANSI escape codes
+#include <direct.h> // For _getcwd
+#else
+#include <unistd.h> // For getcwd
 #endif
 
 void xsh_banner(void) {
@@ -83,11 +88,80 @@ void xsh_loop(void) {
         fflush(stdout); // Ensure prompt is displayed immediately
         line = xsh_read_line();
         add_to_history(line); // Add command to history
-        args = xsh_split_line(line);
-        status = xsh_execute(args); // xsh_execute will handle builtins or launch
+        
+        // Get current working directory for enhanced history
+        char current_dir[1024];
+#ifdef _WIN32
+        _getcwd(current_dir, sizeof(current_dir));
+#else
+        getcwd(current_dir, sizeof(current_dir));
+#endif
+        
+        // Record start time for execution timing
+        clock_t start_time = clock();
+        
+        // Check if line contains operators before splitting
+        if (contains_operators(line)) {
+            // Use advanced parsing for complex commands
+            int token_count;
+            char **tokens = tokenize_with_operators(line, &token_count);
+            if (tokens) {
+                pipeline_t *pipeline = parse_command_line(tokens, token_count);
+                if (pipeline) {
+                    int exit_status = execute_pipeline(pipeline);
+                    
+                    // Calculate execution time
+                    clock_t end_time = clock();
+                    long execution_time_ms = ((end_time - start_time) * 1000) / CLOCKS_PER_SEC;
+                    
+                    // Add to enhanced history with execution data
+                    add_to_enhanced_history(line, current_dir, exit_status, execution_time_ms);
+                    
+                    // Check if any command in the pipeline was 'exit'
+                    command_t *cmd = pipeline->commands;
+                    int should_exit = 0;
+                    while (cmd) {
+                        if (cmd->args && cmd->args[0] && strcmp(cmd->args[0], "exit") == 0) {
+                            should_exit = 1;
+                            break;
+                        }
+                        cmd = cmd->next;
+                    }
+                    free_pipeline(pipeline);
+                    status = should_exit ? 0 : 1; // 0 = exit shell, 1 = continue
+                } else {
+                    // Parse error
+                    add_to_enhanced_history(line, current_dir, -1, 0);
+                    status = 1; // Continue shell loop on parse error
+                }
+                
+                // Free tokens
+                for (int i = 0; i < token_count; i++) {
+                    free(tokens[i]);
+                }
+                free(tokens);
+            } else {
+                // Tokenization error
+                add_to_enhanced_history(line, current_dir, -1, 0);
+                status = 1; // Continue shell loop on tokenization error
+            }
+        } else {
+            // Simple command - use traditional parsing
+            args = xsh_split_line(line);
+            int exit_status = xsh_execute(args); // xsh_execute will handle builtins or launch
+            
+            // Calculate execution time
+            clock_t end_time = clock();
+            long execution_time_ms = ((end_time - start_time) * 1000) / CLOCKS_PER_SEC;
+            
+            // Add to enhanced history with execution data
+            add_to_enhanced_history(line, current_dir, (exit_status == 1) ? 0 : exit_status, execution_time_ms);
+            
+            status = exit_status;
+            free(args);
+        }
 
         free(line);
-        free(args);
     } while (status);
 }
 
@@ -98,12 +172,14 @@ int xsh_execute(char **args) {
         return 1; // Continue shell loop
     }
 
+    // Simple command - check for built-ins first
     for (int i = 0; i < xsh_num_builtins(); i++) {
         if (strcmp(args[0], builtin_str[i]) == 0) {
             return (*builtin_func[i])(args);
         }
     }
 
+    // External command
     return xsh_launch(args);
 }
 
@@ -119,17 +195,32 @@ int main(int argc, char **argv) {
         }
     }
 #endif
-    // Load config files, if any.
-    xsh_banner();
+    // Load configuration files
+    if (config_load_all_files() != 0) {
+        fprintf(stderr, "Warning: Some configuration files could not be loaded, using defaults\n");
+    }
+    
+    // Initialize enhanced history system
+    if (init_history_system() != 0) {
+        fprintf(stderr, "Warning: Failed to initialize history system\n");
+    }
+    
+    // Display startup banner if enabled
+    int startup_banner = config_get_bool(&xshell_config, "startup_banner", 1);
+    if (startup_banner) {
+        xsh_banner();
+    }
 
     // Run command loop.
     xsh_loop();
 
     // Perform any shutdown/cleanup.
-    // Free history
-    for (int i = 0; i < history_count; i++) {
-        free(history[i]);
-    }
+    // Cleanup enhanced history system
+    cleanup_history_system();
+    
+    // Free configuration memory
+    config_free(&xshell_config);
+    config_free(&xcodex_config);
 
     return EXIT_SUCCESS;
 }
