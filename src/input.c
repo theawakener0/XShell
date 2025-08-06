@@ -311,11 +311,6 @@ char *xsh_read_line(void){
 #elif __linux__ // POSIX systems (specifically targeting Linux for termios)
     static struct termios old_tio, new_tio;
     int is_tty = isatty(STDIN_FILENO);
-    int cursor_pos = 0; // Current cursor position in the buffer
-    
-    // History navigation variables
-    static int history_index = -1; // -1 means no history navigation active
-    static char *original_buffer = NULL; // Store original input when navigating history
 
     if (is_tty) {
         tcgetattr(STDIN_FILENO, &old_tio); // Get current terminal attributes
