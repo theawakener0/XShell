@@ -2,8 +2,7 @@
 #define XCODEX_H
 
 /* 
- * XCodex - Simple text editor for XShell
- * POSIX systems only
+ * XCodex - A code editor for XShell
  */
 
 #if !defined(_WIN32) && !defined(_WIN64)

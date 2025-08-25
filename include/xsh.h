@@ -26,7 +26,7 @@
 #define XSH_MAXLINE 1024
 #define XSH_TOK_BUFSIZE 64
 #define XSH_TOK_DELIM " \t\r\n\a"
-#define XSH_HISTORY_SIZE 100
+#define XSH_HISTORY_SIZE 1000
 #define TAB_KEY 9
 
 // Constants for network client (can be moved to a network specific header later)

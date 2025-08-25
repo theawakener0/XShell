@@ -72,6 +72,7 @@
     #include <sys/time.h>
     #include <unistd.h>
     #include <signal.h>
+    #include <dirent.h>
 #endif
 
 /* Common includes */
@@ -86,6 +87,8 @@
 #include <sys/types.h>
 #include <stdarg.h>
 #include <fcntl.h>
+#include <limits.h>
+#include <sys/stat.h>
 #include "xcodex_types.h"
 #include "syntax.h"
 #include "themes.h"
@@ -190,6 +193,15 @@ int ftruncate(int fd, off_t length) {
 /* ============================ XCodex Global Variables ============================ */
 /* Current theme index, used for syntax highlighting and UI colors */
 static int current_theme = 0;
+/* Defer creating default config at startup to avoid blocking disk I/O.
+ * If file is missing, remember path and save on exit or on explicit save. */
+static int xcodex_config_needs_save = 0;
+static char xcodex_config_save_path[512] = {0};
+
+/* Recent files tracking */
+#define MAX_RECENT_FILES 10
+static char *recent_files[MAX_RECENT_FILES];
+static int recent_files_count = 0;
 
 /* Forward declarations */
 void editorSetStatusMessage(const char *fmt, ...);
@@ -201,7 +213,9 @@ void editorInsertChar(int c);
 int editorSave(void);
 void editorFind(int fd);
 void xcodex_execute_command(char *command);
+void xcodex_dir_nav(const char *start_dir);
 void editorInsertRow(int at, char *s, size_t len);
+void editorFreeRows(void);
 void editorDelRow(int at);
 char* editorRowsToString(int *buflen);
 
@@ -214,6 +228,447 @@ void editorRowDelChar(erow *row, int at);
 void editorUpdateRow(erow *row);
 void editorRowInsertChar(erow *row, int at, int c);
 void editorRowAppendString(erow *row, char *s, size_t len);
+
+/* Helper function to reset terminal colors */
+static void resetTerminalColors(void) {
+    printf("\x1b[0m"); /* Reset all formatting */
+    printf("\x1b[2J\x1b[H"); /* Clear screen and go to home */
+}
+
+/* Simple startup menu with small ASCII art.
+ * Returns a malloc'd path to open, or NULL to quit. */
+static char *showStartMenu(void) {
+    /* If stdin is not a TTY, don't show interactive menu. */
+    if (!isatty(STDIN_FILENO)) return NULL;
+
+    /* Get terminal size for centering */
+    int term_width = 80; /* Default fallback */
+    int term_height = 24; /* Default fallback */
+#if XCODEX_POSIX
+    struct winsize ws;
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0) {
+        term_width = ws.ws_col;
+        term_height = ws.ws_row;
+    }
+#endif
+#if XCODEX_WINDOWS
+    CONSOLE_SCREEN_BUFFER_INFO csbi;
+    HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (hOut != INVALID_HANDLE_VALUE && GetConsoleScreenBufferInfo(hOut, &csbi)) {
+        term_width = csbi.srWindow.Right - csbi.srWindow.Left + 1;
+        term_height = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
+    }
+#endif
+
+    /* Apply background color to entire screen */
+    printf("\x1b[2J\x1b[H"); /* Clear screen and go to top */
+    printf("\x1b[48;5;235m"); /* Dark gray background */
+    printf("\x1b[38;5;255m"); /* White foreground */
+    
+    /* Fill entire screen with background color */
+    for (int row = 0; row < term_height; row++) {
+        for (int col = 0; col < term_width; col++) {
+            printf(" ");
+        }
+        if (row < term_height - 1) printf("\n");
+    }
+    
+    /* Return to top of screen for content display */
+    printf("\x1b[H");
+
+    char cwd[PATH_MAX];
+#if XCODEX_WINDOWS
+    if (!_getcwd(cwd, sizeof(cwd))) strcpy(cwd, ".");
+#else
+    if (!getcwd(cwd, sizeof(cwd))) strcpy(cwd, ".");
+#endif
+
+    /* ASCII art */
+    const char *art[] = {
+        "'##::::'##::'######:::'#######::'########::'########:'##::::'##:",
+        ". ##::'##::'##... ##:'##.... ##: ##.... ##: ##.....::. ##::'##::",
+        ":. ##'##::: ##:::..:: ##:::: ##: ##:::: ##: ##::::::::. ##'##:::",
+        "::. ###:::: ##::::::: ##:::: ##: ##:::: ##: ######:::::. ###::::",
+        ":: ## ##::: ##::::::: ##:::: ##: ##:::: ##: ##...:::::: ## ##:::",
+        ": ##:. ##:: ##::: ##: ##:::: ##: ##:::: ##: ##:::::::: ##:. ##::",
+        " ##:::. ##:. ######::. #######:: ########:: ########: ##:::. ##:",
+        "..:::::..:::......::::.......:::........:::........::..:::::..::",
+        NULL
+    };
+
+    /* Center the ASCII art with full-width background */
+    printf("\n");
+    for (const char **p = art; *p; p++) {
+        int art_width = strlen(*p);
+        int padding = (term_width - art_width) / 2;
+        int right_padding = term_width - art_width - padding;
+        
+        /* Print left padding */
+        if (padding > 0) {
+            printf("%*s", padding, "");
+        }
+        /* Print the art */
+        printf("%s", *p);
+        /* Print right padding to fill the line */
+        if (right_padding > 0) {
+            printf("%*s", right_padding, "");
+        }
+        printf("\n");
+    }
+
+    /* Center the title and info with full-width background */
+    char title[256];
+    snprintf(title, sizeof(title), "XCodex - Simple Launcher");
+    int title_width = strlen(title);
+    int title_padding = (term_width - title_width) / 2;
+    int title_right_padding = term_width - title_width - title_padding;
+    
+    printf("\n");
+    if (title_padding > 0) printf("%*s", title_padding, "");
+    printf("%s", title);
+    if (title_right_padding > 0) printf("%*s", title_right_padding, "");
+    printf("\n");
+    
+    /* Add a decorative line with full width */
+    char line_sep[256];
+    int sep_len = title_width < 60 ? title_width : 60;
+    memset(line_sep, '=', sep_len);
+    line_sep[sep_len] = '\0';
+    int sep_padding = (term_width - sep_len) / 2;
+    int sep_right_padding = term_width - sep_len - sep_padding;
+    
+    if (sep_padding > 0) printf("%*s", sep_padding, "");
+    printf("%s", line_sep);
+    if (sep_right_padding > 0) printf("%*s", sep_right_padding, "");
+    printf("\n");
+    
+    char cwd_info[512];
+    snprintf(cwd_info, sizeof(cwd_info), "Current Directory: %s", cwd);
+    int cwd_width = strlen(cwd_info);
+    int cwd_padding = (term_width - cwd_width) / 2;
+    int cwd_right_padding = term_width - cwd_width - cwd_padding;
+    
+    if (cwd_padding > 0) printf("%*s", cwd_padding, "");
+    printf("%s", cwd_info);
+    if (cwd_right_padding > 0) printf("%*s", cwd_right_padding, "");
+    printf("\n");
+    
+    /* Print empty line with full background */
+    printf("%*s\n", term_width, "");
+
+    /* Centered options with full-width background */
+    const char *options = "Options: (n) New file   (r) Recent files   (c) Edit config   (q) Quit";
+    int opt_width = strlen(options);
+    int opt_padding = (term_width - opt_width) / 2;
+    int opt_right_padding = term_width - opt_width - opt_padding;
+    
+    if (opt_padding > 0) printf("%*s", opt_padding, "");
+    printf("%s", options);
+    if (opt_right_padding > 0) printf("%*s", opt_right_padding, "");
+    printf("\n");
+    
+    /* Print empty line with full background */
+    printf("%*s\n", term_width, "");
+
+    /* Show recent files first in organized manner with full-width background */
+    if (recent_files_count > 0) {
+        const char *recent_header = "Recent Files:";
+        int recent_header_width = strlen(recent_header);
+        int recent_padding = (term_width - recent_header_width) / 2;
+        int recent_right_padding = term_width - recent_header_width - recent_padding;
+        
+        if (recent_padding > 0) printf("%*s", recent_padding, "");
+        printf("%s", recent_header);
+        if (recent_right_padding > 0) printf("%*s", recent_right_padding, "");
+        printf("\n");
+        
+        for (int i = 0; i < recent_files_count; i++) {
+            char recent_line[512];
+            snprintf(recent_line, sizeof(recent_line), "R%d) %s", i + 1, recent_files[i]);
+            int recent_line_width = strlen(recent_line);
+            int recent_line_padding = (term_width - recent_line_width) / 2;
+            int recent_line_right_padding = term_width - recent_line_width - recent_line_padding;
+            
+            if (recent_line_padding > 0) printf("%*s", recent_line_padding, "");
+            printf("%s", recent_line);
+            if (recent_line_right_padding > 0) printf("%*s", recent_line_right_padding, "");
+            printf("\n");
+        }
+        
+        /* Print empty line with full background */
+        printf("%*s\n", term_width, "");
+    }
+
+    /* Collect filenames (non-hidden regular files) */
+    const int MAX_FILES = 256;
+    char *files[MAX_FILES];
+    int file_count = 0;
+    for (int i = 0; i < MAX_FILES; i++) files[i] = NULL;
+
+#if XCODEX_POSIX
+    DIR *d = opendir(cwd);
+    if (d) {
+        struct dirent *ent;
+        while ((ent = readdir(d)) != NULL && file_count < MAX_FILES) {
+            if (ent->d_name[0] == '.') continue;
+#ifdef DT_REG
+            if (ent->d_type != DT_REG && ent->d_type != DT_UNKNOWN) continue;
+#endif
+            files[file_count++] = strdup(ent->d_name);
+        }
+        closedir(d);
+    }
+#endif
+
+#if XCODEX_WINDOWS
+    /* Windows enumeration */
+    struct _finddata_t fd;
+    intptr_t h = _findfirst("*", &fd);
+    if (h != -1) {
+        do {
+            if (fd.name[0] == '.') continue;
+            if (fd.attrib & _A_SUBDIR) continue;
+            if (file_count < MAX_FILES) files[file_count++] = _strdup(fd.name);
+        } while (_findnext(h, &fd) == 0);
+        _findclose(h);
+    }
+#endif
+
+    if (file_count > 0) {
+        const char *files_header = "Current Directory Files:";
+        int files_header_width = strlen(files_header);
+        int files_padding = (term_width - files_header_width) / 2;
+        int files_right_padding = term_width - files_header_width - files_padding;
+        
+        if (files_padding > 0) printf("%*s", files_padding, "");
+        printf("%s", files_header);
+        if (files_right_padding > 0) printf("%*s", files_right_padding, "");
+        printf("\n");
+        
+        for (int i = 0; i < file_count; i++) {
+            char file_line[512];
+            snprintf(file_line, sizeof(file_line), "%3d) %s", i + 1, files[i]);
+            int file_line_width = strlen(file_line);
+            int file_line_padding = (term_width - file_line_width) / 2;
+            int file_line_right_padding = term_width - file_line_width - file_line_padding;
+            
+            if (file_line_padding > 0) printf("%*s", file_line_padding, "");
+            printf("%s", file_line);
+            if (file_line_right_padding > 0) printf("%*s", file_line_right_padding, "");
+            printf("\n");
+        }
+        
+        char prompt[256];
+        snprintf(prompt, sizeof(prompt), "Select number to open, R1-R%d for recent, or choose option: ", recent_files_count);
+        int prompt_width = strlen(prompt);
+        int prompt_padding = (term_width - prompt_width) / 2;
+        int prompt_right_padding = term_width - prompt_width - prompt_padding;
+        
+        /* Print empty line with full background */
+        printf("%*s\n", term_width, "");
+        if (prompt_padding > 0) printf("%*s", prompt_padding, "");
+        printf("%s", prompt);
+        if (prompt_right_padding > 0) printf("%*s", prompt_right_padding, "");
+    } else {
+        const char *no_files = "No files found. Choose option (n/r/c/q): ";
+        int no_files_width = strlen(no_files);
+        int no_files_padding = (term_width - no_files_width) / 2;
+        int no_files_right_padding = term_width - no_files_width - no_files_padding;
+        
+        if (no_files_padding > 0) printf("%*s", no_files_padding, "");
+        printf("%s", no_files);
+        if (no_files_right_padding > 0) printf("%*s", no_files_right_padding, "");
+    }
+
+    char line[256];
+    if (!fgets(line, sizeof(line), stdin)) {
+        for (int i = 0; i < file_count; i++) free(files[i]);
+        resetTerminalColors();
+        return NULL;
+    }
+    /* Trim newline */
+    size_t ln = strlen(line);
+    if (ln && line[ln - 1] == '\n') line[ln - 1] = '\0';
+
+    if (line[0] == 'q' || line[0] == 'Q') {
+        for (int i = 0; i < file_count; i++) free(files[i]);
+        resetTerminalColors();
+        return NULL;
+    }
+
+    if (line[0] == 'n' || line[0] == 'N') {
+        printf("New file name: ");
+        if (!fgets(line, sizeof(line), stdin)) {
+            for (int i = 0; i < file_count; i++) free(files[i]);
+            resetTerminalColors();
+            return NULL;
+        }
+        ln = strlen(line);
+        if (ln && line[ln - 1] == '\n') line[ln - 1] = '\0';
+        if (line[0] == '\0') {
+            for (int i = 0; i < file_count; i++) free(files[i]);
+            resetTerminalColors();
+            return NULL;
+        }
+        /* Best-effort create empty file */
+        int fd = open(line, O_CREAT|O_EXCL|O_WRONLY, 0644);
+        if (fd != -1) close(fd);
+        char *res = malloc(strlen(line) + 1);
+        strcpy(res, line);
+        for (int i = 0; i < file_count; i++) free(files[i]);
+        resetTerminalColors();
+        return res;
+    }
+
+    if (line[0] == 'c' || line[0] == 'C') {
+        /* Mirror initEditor config path logic */
+        const char *home = getenv("HOME");
+#ifdef _WIN32
+        if (!home) home = getenv("USERPROFILE");
+#endif
+        char cfgpath[PATH_MAX];
+        if (home) {
+#ifdef _WIN32
+            snprintf(cfgpath, sizeof(cfgpath), "%s\\%s", home, XCODEX_CONFIG_FILE);
+#else
+            snprintf(cfgpath, sizeof(cfgpath), "%s/%s", home, XCODEX_CONFIG_FILE);
+#endif
+        } else {
+            snprintf(cfgpath, sizeof(cfgpath), "%s", XCODEX_CONFIG_FILE);
+        }
+        char *res = malloc(strlen(cfgpath) + 1);
+        strcpy(res, cfgpath);
+        for (int i = 0; i < file_count; i++) free(files[i]);
+        resetTerminalColors();
+        return res;
+    }
+
+    if (line[0] == 'r' || line[0] == 'R') {
+        if (recent_files_count == 0) {
+            printf("No recent files available.\n");
+            for (int i = 0; i < file_count; i++) free(files[i]);
+            resetTerminalColors();
+            return NULL;
+        }
+        
+        printf("Recent files:\n");
+        for (int i = 0; i < recent_files_count; i++) {
+            printf("  %d) %s\n", i + 1, recent_files[i]);
+        }
+        printf("Select recent file (1-%d): ", recent_files_count);
+        
+        if (!fgets(line, sizeof(line), stdin)) {
+            for (int i = 0; i < file_count; i++) free(files[i]);
+            resetTerminalColors();
+            return NULL;
+        }
+        ln = strlen(line);
+        if (ln && line[ln - 1] == '\n') line[ln - 1] = '\0';
+        
+        char *endptr = NULL;
+        long sel = strtol(line, &endptr, 10);
+        if (endptr != line && sel > 0 && sel <= recent_files_count) {
+            char *res = malloc(strlen(recent_files[sel - 1]) + 1);
+            strcpy(res, recent_files[sel - 1]);
+            for (int i = 0; i < file_count; i++) free(files[i]);
+            resetTerminalColors();
+            return res;
+        }
+        
+        for (int i = 0; i < file_count; i++) free(files[i]);
+        resetTerminalColors();
+        return NULL;
+    }
+
+    /* Check for recent file direct selection (R1, R2, etc.) */
+    if ((line[0] == 'R' || line[0] == 'r') && strlen(line) > 1) {
+        char *endptr = NULL;
+        long sel = strtol(line + 1, &endptr, 10);
+        if (endptr != line + 1 && sel > 0 && sel <= recent_files_count) {
+            char *res = malloc(strlen(recent_files[sel - 1]) + 1);
+            strcpy(res, recent_files[sel - 1]);
+            for (int i = 0; i < file_count; i++) free(files[i]);
+            resetTerminalColors();
+            return res;
+        }
+    }
+
+    /* Numeric selection */
+    char *endptr = NULL;
+    long sel = strtol(line, &endptr, 10);
+    if (endptr != line && sel > 0 && sel <= file_count) {
+        char pathbuf[PATH_MAX];
+#ifdef _WIN32
+        snprintf(pathbuf, sizeof(pathbuf), "%s\\%s", cwd, files[sel - 1]);
+#else
+        snprintf(pathbuf, sizeof(pathbuf), "%s/%s", cwd, files[sel - 1]);
+#endif
+        char *res = malloc(strlen(pathbuf) + 1);
+        strcpy(res, pathbuf);
+        for (int i = 0; i < file_count; i++) free(files[i]);
+        resetTerminalColors();
+        return res;
+    }
+
+    for (int i = 0; i < file_count; i++) free(files[i]);
+    
+    /* Reset terminal colors before returning */
+    resetTerminalColors();
+    return NULL;
+}
+
+/* Recent files management */
+void xcodex_init_recent_files(void) {
+    for (int i = 0; i < MAX_RECENT_FILES; i++) {
+        recent_files[i] = NULL;
+    }
+    recent_files_count = 0;
+}
+
+void xcodex_free_recent_files(void) {
+    for (int i = 0; i < recent_files_count; i++) {
+        if (recent_files[i]) {
+            free(recent_files[i]);
+            recent_files[i] = NULL;
+        }
+    }
+    recent_files_count = 0;
+}
+
+void xcodex_add_recent_file(const char *filepath) {
+    if (!filepath) return;
+    
+    /* Check if file already exists in recent list */
+    for (int i = 0; i < recent_files_count; i++) {
+        if (recent_files[i] && strcmp(recent_files[i], filepath) == 0) {
+            /* Move existing file to front */
+            char *temp = recent_files[i];
+            for (int j = i; j > 0; j--) {
+                recent_files[j] = recent_files[j-1];
+            }
+            recent_files[0] = temp;
+            return;
+        }
+    }
+    
+    /* Add new file at front, shift others back */
+    if (recent_files_count >= MAX_RECENT_FILES) {
+        /* Remove oldest */
+        if (recent_files[MAX_RECENT_FILES-1]) {
+            free(recent_files[MAX_RECENT_FILES-1]);
+        }
+        recent_files_count = MAX_RECENT_FILES - 1;
+    }
+    
+    /* Shift existing files back */
+    for (int i = recent_files_count; i > 0; i--) {
+        recent_files[i] = recent_files[i-1];
+    }
+    
+    /* Add new file at front */
+    recent_files[0] = strdup(filepath);
+    recent_files_count++;
+}
 
 /* Undo system forward declarations */
 void xcodex_init_undo_system(void);
@@ -1538,6 +1993,16 @@ void disableRawMode(int fd) {
 /* Called at exit to avoid remaining in raw mode. */
 void editorAtExit(void) {
     disableRawMode(STDIN_FILENO);
+    /* If we deferred config creation, write it now (best-effort). */
+    if (xcodex_config_needs_save && xcodex_config_save_path[0]) {
+        /* Try to save the configuration file; don't abort on failure. */
+        if (config_save_file(&xcodex_config, xcodex_config_save_path) == 0) {
+            /* nothing to do - file created successfully */
+        }
+        /* Clear the flag so we don't try again */
+        xcodex_config_needs_save = 0;
+        xcodex_config_save_path[0] = '\0';
+    }
     
     /* Cleanup plugin systems */
 #ifdef XCODEX_ENABLE_COMPLETION
@@ -1556,6 +2021,8 @@ void editorAtExit(void) {
     xcodex_free_yank_buffer();
     /* Free undo system */
     xcodex_free_undo_system();
+    /* Free recent files */
+    xcodex_free_recent_files();
     /* Reset background color */
     editorSetBackgroundColor(-1);
     /* Clear the screen and reposition cursor at top-left on exit. */
@@ -2311,6 +2778,17 @@ void editorFreeRow(erow *row) {
         row->hl = NULL;
         row->size = 0;
         row->rsize = 0;
+    }
+}
+
+/* Free all rows in the editor */
+void editorFreeRows(void) {
+    for (int i = 0; i < E.numrows; i++) {
+        editorFreeRow(&E.row[i]);
+    }
+    if (E.row) {
+        free(E.row);
+        E.row = NULL;
     }
 }
 
@@ -4367,7 +4845,7 @@ void xcodex_execute_command(char *command) {
     }
 #endif
     else if (strcmp(command, "help") == 0) {
-        editorSetStatusMessage("Commands: q w wq [line#]"
+        editorSetStatusMessage("Commands: q w wq [line#] nav"
 #ifdef XCODEX_ENABLE_LUA
                             " | plugin [file] plugins plugindir [dir]"
 #endif
@@ -4375,6 +4853,8 @@ void xcodex_execute_command(char *command) {
                             " | complete"
 #endif
                             " | Ctrl+N=complete");
+    } else if (strcmp(command, "nav") == 0) {
+        xcodex_dir_nav(".");
     } else if (strlen(command) > 0 && command[0] >= '1' && command[0] <= '9') {
         int line = atoi(command);
         if (line > 0) {
@@ -4384,6 +4864,303 @@ void xcodex_execute_command(char *command) {
         editorSetStatusMessage("Unknown command: %s", command);
     } else {
         editorSetStatusMessage("Empty command");
+    }
+}
+
+void xcodex_dir_nav(const char *start_dir) {
+    char current_dir[1024];
+    strncpy(current_dir, start_dir ? start_dir : ".", sizeof(current_dir) - 1);
+    current_dir[sizeof(current_dir) - 1] = '\0';
+    
+    int selected_item = 0;
+    int scroll_offset = 0;
+    
+    while (1) {
+        // Clear screen and apply theme
+        write(STDOUT_FILENO, "\x1b[2J", 4);
+        write(STDOUT_FILENO, "\x1b[H", 3);
+        
+        // Get terminal size
+        int rows = 24, cols = 80;
+        
+        #ifdef _WIN32
+        CONSOLE_SCREEN_BUFFER_INFO csbi;
+        if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi)) {
+            rows = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
+            cols = csbi.srWindow.Right - csbi.srWindow.Left + 1;
+        }
+        #else
+        struct winsize ws;
+        if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0) {
+            rows = ws.ws_row;
+            cols = ws.ws_col;
+        }
+        #endif
+        
+        // Fill entire screen with background color using theme
+        char bg_seq[64];
+        snprintf(bg_seq, sizeof(bg_seq), "\x1b[48;5;%dm", themes[current_theme].bg_color);
+        write(STDOUT_FILENO, bg_seq, strlen(bg_seq));
+        
+        for (int i = 0; i < rows; i++) {
+            for (int j = 0; j < cols; j++) {
+                write(STDOUT_FILENO, " ", 1);
+            }
+        }
+        write(STDOUT_FILENO, "\x1b[H", 3);
+        
+        // Display header with theme colors
+        char header_seq[128];
+        snprintf(header_seq, sizeof(header_seq), "\x1b[38;5;%d;48;5;%dm", 
+                 themes[current_theme].colors[HL_NORMAL], themes[current_theme].bg_color);
+        write(STDOUT_FILENO, header_seq, strlen(header_seq));
+        
+        int header_len = strlen("Directory Navigator: ") + strlen(current_dir);
+        int header_padding = (cols - header_len) / 2;
+        
+        for (int i = 0; i < header_padding; i++) {
+            write(STDOUT_FILENO, " ", 1);
+        }
+        write(STDOUT_FILENO, "Directory Navigator: ", 21);
+        write(STDOUT_FILENO, current_dir, strlen(current_dir));
+        write(STDOUT_FILENO, "\r\n\r\n", 4);
+        
+        // List directory contents
+        char **entries = NULL;
+        int entry_count = 0;
+        
+        #ifdef _WIN32
+        WIN32_FIND_DATA findFileData;
+        HANDLE hFind;
+        char search_path[1024];
+        snprintf(search_path, sizeof(search_path), "%s\\*", current_dir);
+        
+        hFind = FindFirstFile(search_path, &findFileData);
+        if (hFind != INVALID_HANDLE_VALUE) {
+            do {
+                if (strcmp(findFileData.cFileName, ".") != 0) {
+                    entries = realloc(entries, (entry_count + 1) * sizeof(char*));
+                    entries[entry_count] = malloc(strlen(findFileData.cFileName) + 10);
+                    if (findFileData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+                        snprintf(entries[entry_count], strlen(findFileData.cFileName) + 10, "[DIR] %s", findFileData.cFileName);
+                    } else {
+                        strcpy(entries[entry_count], findFileData.cFileName);
+                    }
+                    entry_count++;
+                }
+            } while (FindNextFile(hFind, &findFileData) != 0);
+            FindClose(hFind);
+        }
+        #else
+        DIR *dir = opendir(current_dir);
+        if (dir) {
+            struct dirent *entry;
+            while ((entry = readdir(dir)) != NULL) {
+                if (strcmp(entry->d_name, ".") != 0) {
+                    struct stat statbuf;
+                    char full_path[1024];
+                    snprintf(full_path, sizeof(full_path), "%s/%s", current_dir, entry->d_name);
+                    
+                    entries = realloc(entries, (entry_count + 1) * sizeof(char*));
+                    entries[entry_count] = malloc(strlen(entry->d_name) + 10);
+                    
+                    if (stat(full_path, &statbuf) == 0 && S_ISDIR(statbuf.st_mode)) {
+                        snprintf(entries[entry_count], strlen(entry->d_name) + 10, "[DIR] %s", entry->d_name);
+                    } else {
+                        strcpy(entries[entry_count], entry->d_name);
+                    }
+                    entry_count++;
+                }
+            }
+            closedir(dir);
+        }
+        #endif
+        
+        // Display entries
+        int display_rows = rows - 6; // Leave space for header and footer
+        for (int i = scroll_offset; i < entry_count && i < scroll_offset + display_rows; i++) {
+            char entry_seq[128];
+            if (i == selected_item) {
+                // Highlight selected item (inverse colors)
+                snprintf(entry_seq, sizeof(entry_seq), "\x1b[38;5;%d;48;5;%dm", 
+                         themes[current_theme].bg_color, themes[current_theme].colors[HL_NORMAL]);
+            } else {
+                // Normal colors
+                snprintf(entry_seq, sizeof(entry_seq), "\x1b[38;5;%d;48;5;%dm", 
+                         themes[current_theme].colors[HL_NORMAL], themes[current_theme].bg_color);
+            }
+            write(STDOUT_FILENO, entry_seq, strlen(entry_seq));
+            
+            int entry_padding = (cols - strlen(entries[i])) / 2;
+            for (int j = 0; j < entry_padding; j++) {
+                write(STDOUT_FILENO, " ", 1);
+            }
+            write(STDOUT_FILENO, entries[i], strlen(entries[i]));
+            
+            // Fill rest of line with background color
+            for (int j = strlen(entries[i]) + entry_padding; j < cols; j++) {
+                write(STDOUT_FILENO, " ", 1);
+            }
+            write(STDOUT_FILENO, "\r\n", 2);
+        }
+        
+        // Display footer
+        write(STDOUT_FILENO, "\r\n", 2);
+        char footer_seq[128];
+        snprintf(footer_seq, sizeof(footer_seq), "\x1b[38;5;%d;48;5;%dm", 
+                themes[current_theme].colors[HL_NORMAL], themes[current_theme].bg_color);
+        write(STDOUT_FILENO, footer_seq, strlen(footer_seq));
+        
+        char footer_text[] = "j/k/↑/↓: Navigate | l/Enter: Select | h/Backspace: Up | Esc/q: Cancel";
+        int footer_padding = (cols - strlen(footer_text)) / 2;
+        
+        for (int i = 0; i < footer_padding; i++) {
+            write(STDOUT_FILENO, " ", 1);
+        }
+        write(STDOUT_FILENO, footer_text, strlen(footer_text));
+        
+        // Get user input
+        int c = editorReadKey(STDIN_FILENO);
+        
+        switch (c) {
+            case ARROW_UP:
+            case 'k':  // Vim motion
+                if (selected_item > 0) {
+                    selected_item--;
+                    if (selected_item < scroll_offset) {
+                        scroll_offset = selected_item;
+                    }
+                }
+                break;
+            case ARROW_DOWN:
+            case 'j':  // Vim motion
+                if (selected_item < entry_count - 1) {
+                    selected_item++;
+                    if (selected_item >= scroll_offset + display_rows) {
+                        scroll_offset = selected_item - display_rows + 1;
+                    }
+                }
+                break;
+            case '\r':
+            case '\n':
+            case 'l':  // Vim motion to enter/open
+                if (entry_count > 0 && selected_item < entry_count) {
+                    char *entry = entries[selected_item];
+                    if (strncmp(entry, "[DIR]", 5) == 0) {
+                        // Navigate to directory
+                        char *dirname = entry + 6; // Skip "[DIR] "
+                        if (strcmp(dirname, "..") == 0) {
+                            // Go up one directory
+                            char *last_slash = strrchr(current_dir, '/');
+                            #ifdef _WIN32
+                            if (!last_slash) last_slash = strrchr(current_dir, '\\');
+                            #endif
+                            if (last_slash && last_slash != current_dir) {
+                                *last_slash = '\0';
+                            } else {
+                                strcpy(current_dir, ".");
+                            }
+                        } else {
+                            // Go into subdirectory
+                            char new_dir[1024];
+                            #ifdef _WIN32
+                            snprintf(new_dir, sizeof(new_dir), "%s\\%s", current_dir, dirname);
+                            #else
+                            snprintf(new_dir, sizeof(new_dir), "%s/%s", current_dir, dirname);
+                            #endif
+                            strcpy(current_dir, new_dir);
+                        }
+                        selected_item = 0;
+                        scroll_offset = 0;
+                    } else {
+                        // Open file - fix the path construction issue
+                        char file_path[1024];
+                        
+                        // Handle current directory properly
+                        if (strcmp(current_dir, ".") == 0) {
+                            strcpy(file_path, entry);
+                        } else {
+                            #ifdef _WIN32
+                            snprintf(file_path, sizeof(file_path), "%s\\%s", current_dir, entry);
+                            #else
+                            snprintf(file_path, sizeof(file_path), "%s/%s", current_dir, entry);
+                            #endif
+                        }
+                        
+                        // Clean up
+                        for (int i = 0; i < entry_count; i++) {
+                            free(entries[i]);
+                        }
+                        free(entries);
+                        
+                        // Reset terminal and clear current editor state
+                        resetTerminalColors();
+                        
+                        // Clear the screen and reset cursor
+                        write(STDOUT_FILENO, "\x1b[2J", 4);
+                        write(STDOUT_FILENO, "\x1b[H", 3);
+                        
+                        // Clear current file content completely
+                        editorFreeRows();
+                        E.numrows = 0;
+                        E.cx = 0;
+                        E.cy = 0;
+                        E.rowoff = 0;
+                        E.coloff = 0;
+                        E.dirty = 0;
+                        
+                        // Free current filename
+                        if (E.filename) {
+                            free(E.filename);
+                            E.filename = NULL;
+                        }
+                        
+                        // Open the new file
+                        if (editorOpen(file_path) == 0) {
+                            // File opened successfully
+                            editorSetStatusMessage("Opened: %s", file_path);
+                            xcodex_add_recent_file(file_path);
+                        } else {
+                            // Handle new file case
+                            editorSetStatusMessage("New file: %s", file_path);
+                        }
+                        return;
+                    }
+                }
+                break;
+            case DEL_KEY:  // Use DEL_KEY instead of duplicate BACKSPACE
+            case 'h':  // Vim motion to go up directory
+                // Go up one directory
+                if (strcmp(current_dir, ".") != 0) {
+                    char *last_slash = strrchr(current_dir, '/');
+                    #ifdef _WIN32
+                    if (!last_slash) last_slash = strrchr(current_dir, '\\');
+                    #endif
+                    if (last_slash && last_slash != current_dir) {
+                        *last_slash = '\0';
+                    } else {
+                        strcpy(current_dir, ".");
+                    }
+                    selected_item = 0;
+                    scroll_offset = 0;
+                }
+                break;
+            case '\x1b':
+            case 'q':
+                // Cancel navigation
+                for (int i = 0; i < entry_count; i++) {
+                    free(entries[i]);
+                }
+                free(entries);
+                resetTerminalColors();
+                return;
+        }
+        
+        // Clean up entries for next iteration
+        for (int i = 0; i < entry_count; i++) {
+            free(entries[i]);
+        }
+        free(entries);
     }
 }
 
@@ -4467,21 +5244,25 @@ void initEditor(void) {
     /* If not loaded from home directory, try current directory */
     if (!config_loaded) {
         if (config_load_file(&xcodex_config, XCODEX_CONFIG_FILE) != 0) {
-            /* Configuration file doesn't exist anywhere, create default one in home directory */
+            /* Configuration file doesn't exist anywhere. Defer creating the
+             * default configuration file to avoid synchronous disk I/O during
+             * startup. Remember a path to save later (on exit or explicit save). */
             if (home) {
 #ifdef _WIN32
                 snprintf(config_path, sizeof(config_path), "%s\\%s", home, XCODEX_CONFIG_FILE);
 #else
                 snprintf(config_path, sizeof(config_path), "%s/%s", home, XCODEX_CONFIG_FILE);
 #endif
-                if (config_save_file(&xcodex_config, config_path) == 0) {
-                    editorSetStatusMessage("Created default configuration file: %s", config_path);
-                }
+                strncpy(xcodex_config_save_path, config_path, sizeof(xcodex_config_save_path) - 1);
+                xcodex_config_save_path[sizeof(xcodex_config_save_path) - 1] = '\0';
+                xcodex_config_needs_save = 1;
+                editorSetStatusMessage("Default configuration will be created on exit: %s", xcodex_config_save_path);
             } else {
-                /* Fallback to current directory if no home found */
-                if (config_save_file(&xcodex_config, XCODEX_CONFIG_FILE) == 0) {
-                    editorSetStatusMessage("Created default configuration file: %s", XCODEX_CONFIG_FILE);
-                }
+                /* Fallback to current directory if no home found - defer there too */
+                strncpy(xcodex_config_save_path, XCODEX_CONFIG_FILE, sizeof(xcodex_config_save_path) - 1);
+                xcodex_config_save_path[sizeof(xcodex_config_save_path) - 1] = '\0';
+                xcodex_config_needs_save = 1;
+                editorSetStatusMessage("Default configuration will be created on exit: %s", xcodex_config_save_path);
             }
         }
     }
@@ -4527,36 +5308,25 @@ void initEditor(void) {
     /* Theme application with enhanced validation and mapping */
     const char *theme_name = config_get(&xcodex_config, "theme");
     if (theme_name) {
-        // Use helper function for theme name-to-index mapping
         int theme_index = xcodex_get_theme_index(theme_name);
-        
         if (theme_index >= 0) {
             current_theme = theme_index;
-            editorSetStatusMessage("✅ Applied theme: %s (index %d)", theme_name, theme_index);
+            editorSetStatusMessage("Applied theme: %s", theme_name);
         } else {
-            // Enhanced error message with complete theme list
-            printf("⚠️  Unknown theme '%s'. Available themes:\n", theme_name);
-            for (int i = 0; i < NUM_THEMES; i++) {
-                printf("  %d: %s%s\n", i, themes[i].name, (i == 0) ? " (default)" : "");
-            }
-            current_theme = 0; // Fallback to xcodex_dark (index 0)
-            editorSetStatusMessage("🔄 Fallback to default theme: %s", themes[0].name);
+            /* Avoid printing large theme lists during startup; show concise status.
+             * Listing themes can be done on demand (e.g., help or :themes). */
+            editorSetStatusMessage("Unknown theme '%s' - using default: %s (use :themes to list)", theme_name, themes[0].name);
+            current_theme = 0; /* Fallback to default */
         }
     } else {
-        // No theme configured, use default
-        current_theme = 0; // Default to xcodex_dark (index 0)
-        editorSetStatusMessage("🎨 Using default theme: %s", themes[0].name);
+        current_theme = 0; /* Default to xcodex_dark (index 0) */
+        editorSetStatusMessage("Using default theme: %s", themes[0].name);
     }
     
     /* Apply the background color for the current theme - critical for theme application */
     if (current_theme >= 0 && current_theme < NUM_THEMES) {
+        /* editorSetBackgroundColor handles clearing/flushing; avoid extra blocking write */
         editorSetBackgroundColor(themes[current_theme].bg_color);
-        /* Force clear screen to apply background */
-        char clear_buf[16];
-        int len = snprintf(clear_buf, sizeof(clear_buf), "\x1b[2J\x1b[H");
-        if (len > 0 && len < sizeof(clear_buf)) {
-            xcodex_write(STDOUT_FILENO, clear_buf, len);
-        }
     }
     
     /* Initialize modal system */
@@ -4623,14 +5393,21 @@ void initEditor(void) {
 }
 
 int xcodex_main(int argc, char **argv) {
-    if (argc != 2) {
-        fprintf(stderr,"Usage: xcodex <filename>\n");
-        return 1;
+    char *startup_file = NULL;
+    if (argc == 2) {
+        startup_file = strdup(argv[1]);
+    } else {
+        /* Show simple launcher menu (no raw mode yet) */
+        startup_file = showStartMenu();
+        if (!startup_file) return 1; /* user quit or no selection */
     }
 
     initEditor();
-    editorSelectSyntaxHighlight(argv[1]);
-    editorOpen(argv[1]);
+    xcodex_init_recent_files();
+    editorSelectSyntaxHighlight(startup_file);
+    editorOpen(startup_file);
+    xcodex_add_recent_file(startup_file);
+    free(startup_file);
     
     /* Try to enable raw mode with better error handling */
     if (enableRawMode(STDIN_FILENO) == -1) {

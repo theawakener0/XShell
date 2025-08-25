@@ -355,7 +355,7 @@ int xsh_cat(char **args) {
     for (int i = 1; args[i] != NULL; i++) {
         FILE *fp = fopen(args[i], "r");
         if (fp == NULL) {
-            fprintf(stderr, "xsh: cat: cannot open '%s': ", args[i]);
+            fprintf(stderr, "xsh: cat: cannot open '%s': \n", args[i]);
             perror("");
             continue; 
         }
